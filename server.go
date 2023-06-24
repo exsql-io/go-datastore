@@ -1,6 +1,6 @@
 package main
 
-import "datastore/services"
+import "github.com/exsql-io/go-datastore/datastore/services"
 
 func main() {
 	var tailer services.Tailer
