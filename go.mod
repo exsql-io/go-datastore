@@ -1,4 +1,4 @@
-module github.com/exsql-io/go-datastore/datastore
+module datastore
 
 go 1.20
 
