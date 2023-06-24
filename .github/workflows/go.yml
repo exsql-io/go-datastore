@@ -23,11 +23,17 @@ jobs:
         cache-dependency-path: subdir/go.sum
         
     - name: Install dependencies
+      env:
+        GOPATH: .
       run: |
         go get .
           
     - name: Build
+      env:
+        GOPATH: .
       run: go build -v ./...
 
     - name: Test
+      env:
+        GOPATH: .
       run: go test -v ./...
