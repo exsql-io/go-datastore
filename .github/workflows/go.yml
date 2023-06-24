@@ -13,22 +13,13 @@ jobs:
 
   build:
     runs-on: ubuntu-latest
-    env:
-      GOPATH: ${{ github.workspace }}
-      GOBIN: ${{ github.workspace }}/bin
-    defaults:
-      run:
-        working-directory: ${{ env.GOPATH }}/src/datastore
     steps:
     - uses: actions/checkout@v3
-      with:
-        fetch-depth: 1
-        path: ${{ env.GOPATH }}/src/datastore
 
     - name: Set up Go
       uses: actions/setup-go@v3
       with:
-        go-version: 1.20
+        go-version: 1.20.x
         cache-dependency-path: subdir/go.sum
         
     - name: Install dependencies
