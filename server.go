@@ -1,10 +1,7 @@
 package main
 
 import (
-	"errors"
-	"fmt"
 	"github.com/exsql-io/go-datastore/services"
-	"log"
 )
 
 func main() {
@@ -14,18 +11,14 @@ func main() {
 	}
 
 	defer tailer.Stop()
-
 	tailer.Start()
-	for tailer.IsRunning {
-		message := <-tailer.Channel
-		if len(message.Errors) > 0 {
-			for _, err := range message.Errors {
-				log.Fatalln(err)
-			}
 
-			panic(errors.New("an error occurred while consuming topic"))
-		}
-
-		fmt.Println("topic:", message.Record.Topic, "record value:", string(message.Record.Value))
+	var schema services.Schema
+	leaf, err := services.NewLeaf(schema, tailer.Channel)
+	if err != nil {
+		panic(err)
 	}
+
+	leaf.Start()
+	defer leaf.Stop()
 }
