@@ -1,0 +1,41 @@
+fields:
+  - name: vendorId
+    nullable: false
+    type:
+      name: utf8
+  - name: pickupTimestamp
+    nullable: false
+    type:
+      name: long
+  - name: dropOffTimestamp
+    nullable: false
+    type:
+      name: long
+  - name: passengers
+    nullable: false
+    type:
+      name: short
+  - name: distanceInMiles
+    nullable: false
+    type:
+      name: double
+  - name: paymentType
+    nullable: false
+    type:
+      name: utf8
+  - name: fareAmount
+    nullable: false
+    type:
+      name: double
+  - name: tipAmount
+    nullable: false
+    type:
+      name: double
+  - name: tollsAmount
+    nullable: true
+    type:
+      name: double
+  - name: totalAmount
+    nullable: false
+    type:
+      name: double

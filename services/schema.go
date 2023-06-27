@@ -1,5 +1,7 @@
 package services
 
+import "gopkg.in/yaml.v3"
+
 type TypeName string
 
 const (
@@ -50,8 +52,18 @@ type Field struct {
 	Metadata map[string]string
 }
 
-type Fields map[string]Field
+type Fields []Field
 
 type Schema struct {
 	Fields Fields
+}
+
+func FromYaml(data []byte) (*Schema, error) {
+	schema := Schema{}
+	err := yaml.Unmarshal(data, &schema)
+	if err != nil {
+		return nil, err
+	}
+
+	return &schema, nil
 }
