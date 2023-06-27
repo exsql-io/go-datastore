@@ -1,36 +1,47 @@
 package services
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log"
+	"sync"
 )
 
 type Leaf struct {
-	Schema *Schema
-	input  chan Message
+	Schema    Schema
+	IsRunning bool
+	input     *chan Message
+	context   context.Context
+	wg        *sync.WaitGroup
 }
 
-func NewLeaf(schema Schema, input chan Message) (Leaf, error) {
+func NewLeaf(schema Schema, input *chan Message, wg *sync.WaitGroup) (Leaf, error) {
+	ctx := context.Background()
 	leaf := Leaf{
-		Schema: &schema,
-		input:  input,
+		Schema:    schema,
+		IsRunning: false,
+		input:     input,
+		context:   ctx,
+		wg:        wg,
 	}
 
 	return leaf, nil
 }
 
 func (leaf *Leaf) Start() {
-	go process(leaf.Schema, leaf.input)
+	go leaf.process()
+	leaf.IsRunning = true
+	leaf.wg.Add(1)
 }
 
 func (leaf *Leaf) Stop() {
-
+	leaf.wg.Done()
 }
 
-func process(schema *Schema, input chan Message) {
-	for {
-		message := <-input
+func (leaf *Leaf) process() {
+	for leaf.IsRunning {
+		message := <-*leaf.input
 		if len(message.Errors) > 0 {
 			for _, err := range message.Errors {
 				log.Fatalln(err)

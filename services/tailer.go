@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"github.com/twmb/franz-go/pkg/kgo"
+	"sync"
 )
 
 type Message struct {
@@ -13,13 +14,14 @@ type Message struct {
 type Tailer struct {
 	Id        string
 	Topic     string
-	Channel   chan Message
+	Channel   *chan Message
 	IsRunning bool
 	context   context.Context
 	client    *kgo.Client
+	wg        *sync.WaitGroup
 }
 
-func NewTailer(id string, brokers []string, topic string) (*Tailer, error) {
+func NewTailer(id string, brokers []string, topic string, wg *sync.WaitGroup) (*Tailer, error) {
 	ctx := context.Background()
 	channel := make(chan Message)
 	client, err := kgo.NewClient(
@@ -35,41 +37,44 @@ func NewTailer(id string, brokers []string, topic string) (*Tailer, error) {
 	tailer := Tailer{
 		Id:        id,
 		Topic:     topic,
-		Channel:   channel,
+		Channel:   &channel,
 		IsRunning: false,
 		context:   ctx,
 		client:    client,
+		wg:        wg,
 	}
 
 	return &tailer, nil
 }
 
 func (tailer *Tailer) Start() {
-	go consume(tailer.client, tailer.Channel, tailer.context)
+	go tailer.consume()
 	tailer.IsRunning = true
+	tailer.wg.Add(1)
 }
 
 func (tailer *Tailer) Stop() {
 	tailer.IsRunning = false
 	tailer.client.Close()
+	tailer.wg.Done()
 }
 
-func consume(client *kgo.Client, publishTo chan Message, context context.Context) {
-	for {
-		fetches := client.PollFetches(context)
+func (tailer *Tailer) consume() {
+	for tailer.IsRunning {
+		fetches := tailer.client.PollFetches(tailer.context)
 		if errs := fetches.Errors(); len(errs) > 0 {
 			errors := make([]error, len(errs))
 			for i, err := range errs {
 				errors[i] = err.Err
 			}
 
-			publishTo <- Message{Errors: errors}
+			*tailer.Channel <- Message{Errors: errors}
 			return
 		}
 
 		iter := fetches.RecordIter()
 		for !iter.Done() {
-			publishTo <- Message{Record: iter.Next()}
+			*tailer.Channel <- Message{Record: iter.Next()}
 		}
 	}
 }
