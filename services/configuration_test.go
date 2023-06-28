@@ -1,22 +1,45 @@
 package services
 
 import (
-	"os"
 	"testing"
 )
 
-func TestFromYaml(t *testing.T) {
-	yml, err := os.ReadFile("../testdata/yaml/schema.yaml")
+func TestLoadConfiguration(t *testing.T) {
+	configuration, err := LoadConfiguration("../testdata/yaml/configuration.yaml")
 	if err != nil {
 		t.Error(err)
 	}
 
-	schema, err := FromYaml(yml)
-	if err != nil {
-		t.Error(err)
+	if configuration.InstanceId != "instance-id" {
+		t.Errorf("expected InstanceId field to be 'instance-id', but got: '%s'", configuration.InstanceId)
 	}
 
-	AssertSchema(t, schema, []FieldAssertion{
+	if len(configuration.Brokers) != 1 {
+		t.Errorf("expected 1 broker configuration, got: %d", len(configuration.Brokers))
+	}
+
+	if configuration.Brokers[0] != "localhost:9092" {
+		t.Errorf("expected Brokers[0] field to be 'localhost:9092', but got: '%s'", configuration.Brokers[0])
+	}
+
+	if len(configuration.Streams) != 1 {
+		t.Errorf("expected 1 stream configuration, got: %d", len(configuration.Streams))
+	}
+
+	assertStream(configuration, 0, "nyc-taxi-trips", Json, t)
+}
+
+func assertStream(configuration *Configuration, index int, topic string, format FormatType, t *testing.T) {
+	stream := configuration.Streams[index]
+	if stream.Topic != topic {
+		t.Errorf("expected topic of stream at: %d to be %s, got: %s", index, topic, stream.Topic)
+	}
+
+	if stream.Format != format {
+		t.Errorf("expected format of stream at: %d to be %v, got: %v", index, format, stream.Format)
+	}
+
+	AssertSchema(t, &stream.Schema, []FieldAssertion{
 		func(t *testing.T, schema *Schema, index int) {
 			assertField(t, schema, index, "vendorId", false, Type{Name: Utf8Type})
 		},
@@ -48,31 +71,4 @@ func TestFromYaml(t *testing.T) {
 			assertField(t, schema, index, "totalAmount", false, Type{Name: DoubleType})
 		},
 	})
-}
-
-type FieldAssertion func(t *testing.T, schema *Schema, index int)
-
-func AssertSchema(t *testing.T, schema *Schema, assertions []FieldAssertion) {
-	if len(schema.Fields) != len(assertions) {
-		t.Errorf("expected %d fields, got: %d", len(assertions), len(schema.Fields))
-	}
-
-	for index, assertion := range assertions {
-		assertion(t, schema, index)
-	}
-}
-
-func assertField(t *testing.T, schema *Schema, index int, name string, nullable bool, tpe Type) {
-	field := schema.Fields[index]
-	if field.Name != name {
-		t.Errorf("expected name of field at: %d to be %s, got: %s", index, name, field.Name)
-	}
-
-	if field.Nullable != nullable {
-		t.Errorf("expected nullable of field at: %d to be %v, got: %v", index, nullable, field.Nullable)
-	}
-
-	if field.Type != tpe {
-		t.Errorf("expected type of field at: %d to be %+v, got: %+v", index, tpe, field.Type)
-	}
 }

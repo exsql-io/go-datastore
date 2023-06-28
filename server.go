@@ -2,13 +2,19 @@ package main
 
 import (
 	"github.com/exsql-io/go-datastore/services"
+	"os"
 	"sync"
 )
 
 func main() {
+	configuration, err := services.LoadConfiguration(os.Getenv("EXSQL_DATASTORE_SERVER_CONFIGURATION_PATH"))
+	if err != nil {
+		panic(err)
+	}
+
 	wg := sync.WaitGroup{}
 
-	tailer, err := services.NewTailer("tailer", []string{"localhost:9092"}, "quickstart-events", &wg)
+	tailer, err := services.NewTailer(configuration.InstanceId, configuration.Brokers, configuration.Streams[0].Topic, &wg)
 	if err != nil {
 		panic(err)
 	}
@@ -16,8 +22,7 @@ func main() {
 	defer tailer.Stop()
 	tailer.Start()
 
-	var schema services.Schema
-	leaf, err := services.NewLeaf(schema, tailer.Channel, &wg)
+	leaf, err := services.NewLeaf(configuration.Streams[0].Schema, tailer.Channel, &wg)
 	if err != nil {
 		panic(err)
 	}
