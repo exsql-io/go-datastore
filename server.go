@@ -1,31 +1,34 @@
 package main
 
 import (
-	"errors"
-	"fmt"
 	"github.com/exsql-io/go-datastore/services"
-	"log"
+	"os"
+	"sync"
 )
 
 func main() {
-	tailer, err := services.NewTailer("tailer", []string{"localhost:9092"}, "quickstart-events")
+	configuration, err := services.LoadConfiguration(os.Getenv("EXSQL_DATASTORE_SERVER_CONFIGURATION_PATH"))
+	if err != nil {
+		panic(err)
+	}
+
+	wg := sync.WaitGroup{}
+
+	tailer, err := services.NewTailer(configuration.InstanceId, configuration.Brokers, configuration.Streams[0].Topic, &wg)
 	if err != nil {
 		panic(err)
 	}
 
 	defer tailer.Stop()
-
 	tailer.Start()
-	for tailer.IsRunning {
-		message := <-tailer.Channel
-		if len(message.Errors) > 0 {
-			for _, err := range message.Errors {
-				log.Fatalln(err)
-			}
 
-			panic(errors.New("an error occurred while consuming topic"))
-		}
-
-		fmt.Println("topic:", message.Record.Topic, "record value:", string(message.Record.Value))
+	leaf, err := services.NewLeaf(configuration.Streams[0].Schema, tailer.Channel, &wg)
+	if err != nil {
+		panic(err)
 	}
+
+	defer leaf.Stop()
+	leaf.Start()
+
+	wg.Wait()
 }

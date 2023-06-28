@@ -1,0 +1,16 @@
+instanceId: local#1
+brokers:
+  - localhost:9092
+streams:
+  - topic: json-events
+    format: json
+    schema:
+      fields:
+        - name: id
+          nullable: false
+          type:
+            name: int
+        - name: name
+          nullable: false
+          type:
+            name: utf8
