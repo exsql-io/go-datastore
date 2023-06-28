@@ -4,19 +4,20 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/exsql-io/go-datastore/common"
 	"log"
 	"sync"
 )
 
 type Leaf struct {
-	Schema    Schema
+	Schema    common.Schema
 	IsRunning bool
 	input     *chan Message
 	context   context.Context
 	wg        *sync.WaitGroup
 }
 
-func NewLeaf(schema Schema, input *chan Message, wg *sync.WaitGroup) (Leaf, error) {
+func NewLeaf(schema common.Schema, input *chan Message, wg *sync.WaitGroup) (Leaf, error) {
 	ctx := context.Background()
 	leaf := Leaf{
 		Schema:    schema,

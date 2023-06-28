@@ -1,6 +1,7 @@
-package services
+package main
 
 import (
+	"github.com/exsql-io/go-datastore/common"
 	"gopkg.in/yaml.v3"
 	"os"
 )
@@ -12,9 +13,9 @@ const (
 )
 
 type Stream struct {
-	Topic  string     `yaml:"topic"`
-	Format FormatType `yaml:"format"`
-	Schema Schema     `yaml:"schema"`
+	Topic  string        `yaml:"topic"`
+	Format FormatType    `yaml:"format"`
+	Schema common.Schema `yaml:"schema"`
 }
 
 type Configuration struct {

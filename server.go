@@ -7,7 +7,7 @@ import (
 )
 
 func main() {
-	configuration, err := services.LoadConfiguration(os.Getenv("EXSQL_DATASTORE_SERVER_CONFIGURATION_PATH"))
+	configuration, err := LoadConfiguration(os.Getenv("EXSQL_DATASTORE_SERVER_CONFIGURATION_PATH"))
 	if err != nil {
 		panic(err)
 	}
