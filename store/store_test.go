@@ -31,6 +31,7 @@ func TestToArrowSchema(t *testing.T) {
 			t.Errorf("expected field at %d to have nullable: %t, got: %t", index, field.Nullable, arrowField.Nullable)
 		}
 
+		assertFieldType(t, index, field.Type.Name, arrowField.Type)
 	}
 }
 
