@@ -1,17 +1,11 @@
 package common
 
 import (
-	"os"
 	"testing"
 )
 
 func TestFromYaml(t *testing.T) {
-	yml, err := os.ReadFile("../testdata/yaml/schema.yaml")
-	if err != nil {
-		t.Error(err)
-	}
-
-	schema, err := FromYaml(yml)
+	schema, err := FromYaml("../testdata/yaml/schema.yaml")
 	if err != nil {
 		t.Error(err)
 	}
