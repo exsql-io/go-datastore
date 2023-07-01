@@ -20,9 +20,10 @@ type CloseableIterator interface {
 }
 
 type Store interface {
-	Close()
-	Append(offset int64, key []byte, value []byte)
+	Get(key []byte) []byte
+	Put(offset int64, key []byte, value []byte)
 	Iterator() (*CloseableIterator, error)
+	Close()
 }
 
 func ToArrowSchema(schema *common.Schema) (*arrow.Schema, error) {

@@ -12,6 +12,7 @@ import (
 type InMemoryStore struct {
 	schema          *arrow.Schema
 	records         map[int64][]byte
+	keyLookup       map[string]int64
 	inputFormatType InputFormatType
 	allocator       *memory.Allocator
 }
@@ -26,6 +27,7 @@ func NewInMemoryStore(allocator *memory.Allocator, inputFormatType InputFormatTy
 	store = InMemoryStore{
 		schema:          arrowSchema,
 		records:         map[int64][]byte{},
+		keyLookup:       map[string]int64{},
 		inputFormatType: inputFormatType,
 		allocator:       allocator,
 	}
@@ -33,10 +35,23 @@ func NewInMemoryStore(allocator *memory.Allocator, inputFormatType InputFormatTy
 	return &store, nil
 }
 
-func (store InMemoryStore) Close() {}
+func (store InMemoryStore) Get(key []byte) []byte {
+	offset, ok := store.getOffsetFromKey(key)
+	if !ok {
+		return nil
+	}
 
-func (store InMemoryStore) Append(offset int64, key []byte, value []byte) {
+	value, ok := store.records[offset]
+	if !ok {
+		return nil
+	}
+
+	return value
+}
+
+func (store InMemoryStore) Put(offset int64, key []byte, value []byte) {
 	store.records[offset] = value
+	store.keyLookup[string(key)] = offset
 }
 
 func (store InMemoryStore) Iterator() (*CloseableIterator, error) {
@@ -52,6 +67,13 @@ func (store InMemoryStore) Iterator() (*CloseableIterator, error) {
 	}
 
 	return &iterator, nil
+}
+
+func (store InMemoryStore) Close() {}
+
+func (store InMemoryStore) getOffsetFromKey(key []byte) (int64, bool) {
+	offset, ok := store.keyLookup[string(key)]
+	return offset, ok
 }
 
 type inMemoryStoreCloseableIterator struct {
