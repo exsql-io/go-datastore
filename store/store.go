@@ -19,6 +19,12 @@ type CloseableIterator interface {
 	Close()
 }
 
+type Store interface {
+	Close()
+	Append(offset int64, key []byte, value []byte)
+	Iterator() (*CloseableIterator, error)
+}
+
 func ToArrowSchema(schema *common.Schema) (*arrow.Schema, error) {
 	var arrowFields []arrow.Field
 	for _, field := range schema.Fields {

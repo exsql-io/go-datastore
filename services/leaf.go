@@ -13,7 +13,7 @@ import (
 type Leaf struct {
 	Schema    common.Schema
 	IsRunning bool
-	Store     *store.InMemoryStore
+	Store     *store.Store
 	input     *chan Message
 	context   context.Context
 	wg        *sync.WaitGroup
@@ -60,6 +60,6 @@ func (leaf *Leaf) process() {
 			panic(errors.New("an error occurred while consuming topic"))
 		}
 
-		leaf.Store.Append(message.Record.Offset, message.Record.Key, message.Record.Value)
+		(*leaf.Store).Append(message.Record.Offset, message.Record.Key, message.Record.Value)
 	}
 }

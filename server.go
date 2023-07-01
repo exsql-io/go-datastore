@@ -37,8 +37,8 @@ func main() {
 	defer leaf.Stop()
 	leaf.Start()
 
-	_, err = scheduler.Every(1).Seconds().Do(func(store *store.InMemoryStore) {
-		iterator, err := store.Iterator()
+	_, err = scheduler.Every(1).Seconds().Do(func(store *store.Store) {
+		iterator, err := (*store).Iterator()
 		if err != nil {
 			panic(err)
 		}

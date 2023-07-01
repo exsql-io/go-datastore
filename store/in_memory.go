@@ -16,13 +16,14 @@ type InMemoryStore struct {
 	allocator       *memory.Allocator
 }
 
-func NewInMemoryStore(allocator *memory.Allocator, inputFormatType InputFormatType, schema *common.Schema) (*InMemoryStore, error) {
+func NewInMemoryStore(allocator *memory.Allocator, inputFormatType InputFormatType, schema *common.Schema) (*Store, error) {
 	arrowSchema, err := ToArrowSchema(schema)
 	if err != nil {
 		return nil, err
 	}
 
-	store := InMemoryStore{
+	var store Store
+	store = InMemoryStore{
 		schema:          arrowSchema,
 		records:         map[int64][]byte{},
 		inputFormatType: inputFormatType,
@@ -32,10 +33,25 @@ func NewInMemoryStore(allocator *memory.Allocator, inputFormatType InputFormatTy
 	return &store, nil
 }
 
-func (store *InMemoryStore) Close() {}
+func (store InMemoryStore) Close() {}
 
-func (store *InMemoryStore) Append(offset int64, key []byte, value []byte) {
+func (store InMemoryStore) Append(offset int64, key []byte, value []byte) {
 	store.records[offset] = value
+}
+
+func (store InMemoryStore) Iterator() (*CloseableIterator, error) {
+	table, reader, err := store.reader()
+	if err != nil {
+		return nil, err
+	}
+
+	var iterator CloseableIterator
+	iterator = inMemoryStoreCloseableIterator{
+		table:  table,
+		reader: reader,
+	}
+
+	return &iterator, nil
 }
 
 type inMemoryStoreCloseableIterator struct {
@@ -57,22 +73,7 @@ func (iterator inMemoryStoreCloseableIterator) Close() {
 	(*iterator.table).Release()
 }
 
-func (store *InMemoryStore) Iterator() (*CloseableIterator, error) {
-	table, reader, err := store.reader()
-	if err != nil {
-		return nil, err
-	}
-
-	var iterator CloseableIterator
-	iterator = inMemoryStoreCloseableIterator{
-		table:  table,
-		reader: reader,
-	}
-
-	return &iterator, nil
-}
-
-func (store *InMemoryStore) reader() (*arrow.Table, *array.TableReader, error) {
+func (store InMemoryStore) reader() (*arrow.Table, *array.TableReader, error) {
 	record, err := store.inMemoryToRecords()
 	if err != nil {
 		return nil, nil, err
@@ -86,7 +87,7 @@ func (store *InMemoryStore) reader() (*arrow.Table, *array.TableReader, error) {
 	return &table, reader, nil
 }
 
-func (store *InMemoryStore) inMemoryToRecords() (*arrow.Record, error) {
+func (store InMemoryStore) inMemoryToRecords() (*arrow.Record, error) {
 	builder := array.NewRecordBuilder(*store.allocator, store.schema)
 	defer builder.Release()
 
