@@ -7,7 +7,6 @@ import (
 	"github.com/exsql-io/go-datastore/common"
 	"github.com/exsql-io/go-datastore/store"
 	"log"
-	"sync"
 )
 
 type Leaf struct {
@@ -16,10 +15,9 @@ type Leaf struct {
 	Store     *store.Store
 	input     *chan Message
 	context   context.Context
-	wg        *sync.WaitGroup
 }
 
-func NewLeaf(schema common.Schema, inputFormatType store.InputFormatType, input *chan Message, wg *sync.WaitGroup) (*Leaf, error) {
+func NewLeaf(schema common.Schema, inputFormatType store.InputFormatType, input *chan Message) (*Leaf, error) {
 	ctx := context.Background()
 	allocator := memory.DefaultAllocator
 	s, err := store.NewInMemoryStore(&allocator, inputFormatType, &schema)
@@ -32,7 +30,6 @@ func NewLeaf(schema common.Schema, inputFormatType store.InputFormatType, input 
 		IsRunning: false,
 		input:     input,
 		context:   ctx,
-		wg:        wg,
 		Store:     s,
 	}
 
@@ -42,11 +39,9 @@ func NewLeaf(schema common.Schema, inputFormatType store.InputFormatType, input 
 func (leaf *Leaf) Start() {
 	go leaf.process()
 	leaf.IsRunning = true
-	leaf.wg.Add(1)
 }
 
 func (leaf *Leaf) Stop() {
-	leaf.wg.Done()
 }
 
 func (leaf *Leaf) process() {
