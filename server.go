@@ -37,20 +37,25 @@ func main() {
 	defer leaf.Stop()
 	leaf.Start()
 
-	_, err = scheduler.Every(1).Seconds().Do(func(iterator store.InMemoryStoreCloseableIterator) {
-		fmt.Println("Ingested records from:", tailer.Topic)
-		defer iterator.Close()
+	_, err = scheduler.Every(1).Seconds().Do(func(store *store.InMemoryStore) {
+		iterator, err := store.Iterator()
+		if err != nil {
+			panic(err)
+		}
 
-		for iterator.Next() {
-			record := *iterator.Value()
-			json, err := record.MarshalJSON()
+		fmt.Println("Ingested records from:", tailer.Topic)
+		defer (*iterator).Close()
+
+		for (*iterator).Next() {
+			record := (*iterator).Value()
+			json, err := (*record).MarshalJSON()
 			if err != nil {
 				panic(err)
 			}
 
 			fmt.Printf("record: %s\n", string(json))
 		}
-	}, leaf.Store.Iterator())
+	}, leaf.Store)
 
 	if err != nil {
 		panic(err)

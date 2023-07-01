@@ -60,9 +60,6 @@ func (leaf *Leaf) process() {
 			panic(errors.New("an error occurred while consuming topic"))
 		}
 
-		err := leaf.Store.Append(message.Record.Value)
-		if err != nil {
-			log.Fatalln(err)
-		}
+		leaf.Store.Append(message.Record.Offset, message.Record.Key, message.Record.Value)
 	}
 }
