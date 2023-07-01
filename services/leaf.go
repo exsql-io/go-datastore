@@ -3,40 +3,45 @@ package services
 import (
 	"context"
 	"errors"
-	"fmt"
+	"github.com/apache/arrow/go/v13/arrow/memory"
+	"github.com/exsql-io/go-datastore/common"
+	"github.com/exsql-io/go-datastore/store"
 	"log"
-	"sync"
 )
 
 type Leaf struct {
-	Schema    Schema
+	Schema    common.Schema
 	IsRunning bool
+	Store     *store.Store
 	input     *chan Message
 	context   context.Context
-	wg        *sync.WaitGroup
 }
 
-func NewLeaf(schema Schema, input *chan Message, wg *sync.WaitGroup) (Leaf, error) {
+func NewLeaf(schema common.Schema, inputFormatType store.InputFormatType, input *chan Message) (*Leaf, error) {
 	ctx := context.Background()
+	allocator := memory.DefaultAllocator
+	s, err := store.NewInMemoryStore(&allocator, inputFormatType, &schema)
+	if err != nil {
+		return nil, err
+	}
+
 	leaf := Leaf{
 		Schema:    schema,
 		IsRunning: false,
 		input:     input,
 		context:   ctx,
-		wg:        wg,
+		Store:     s,
 	}
 
-	return leaf, nil
+	return &leaf, nil
 }
 
 func (leaf *Leaf) Start() {
 	go leaf.process()
 	leaf.IsRunning = true
-	leaf.wg.Add(1)
 }
 
 func (leaf *Leaf) Stop() {
-	leaf.wg.Done()
 }
 
 func (leaf *Leaf) process() {
@@ -50,6 +55,6 @@ func (leaf *Leaf) process() {
 			panic(errors.New("an error occurred while consuming topic"))
 		}
 
-		fmt.Println("topic:", message.Record.Topic, "record value:", string(message.Record.Value))
+		(*leaf.Store).Put(message.Record.Offset, message.Record.Key, message.Record.Value)
 	}
 }

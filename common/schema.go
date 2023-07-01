@@ -1,6 +1,9 @@
-package services
+package common
 
-import "gopkg.in/yaml.v3"
+import (
+	"gopkg.in/yaml.v3"
+	"os"
+)
 
 type TypeName string
 
@@ -58,9 +61,14 @@ type Schema struct {
 	Fields Fields
 }
 
-func FromYaml(data []byte) (*Schema, error) {
+func FromYaml(path string) (*Schema, error) {
+	yml, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+
 	schema := Schema{}
-	err := yaml.Unmarshal(data, &schema)
+	err = yaml.Unmarshal(yml, &schema)
 	if err != nil {
 		return nil, err
 	}
