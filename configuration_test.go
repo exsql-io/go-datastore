@@ -2,6 +2,7 @@ package main
 
 import (
 	"github.com/exsql-io/go-datastore/common"
+	"github.com/exsql-io/go-datastore/store"
 	"testing"
 )
 
@@ -27,10 +28,10 @@ func TestLoadConfiguration(t *testing.T) {
 		t.Errorf("expected 1 stream configuration, got: %d", len(configuration.Streams))
 	}
 
-	assertStream(configuration, 0, "nyc-taxi-trips", Json, t)
+	assertStream(configuration, 0, "nyc-taxi-trips", store.Json, t)
 }
 
-func assertStream(configuration *Configuration, index int, topic string, format FormatType, t *testing.T) {
+func assertStream(configuration *Configuration, index int, topic string, format store.InputFormatType, t *testing.T) {
 	stream := configuration.Streams[index]
 	if stream.Topic != topic {
 		t.Errorf("expected topic of stream at: %d to be %s, got: %s", index, topic, stream.Topic)

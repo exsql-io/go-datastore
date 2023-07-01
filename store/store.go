@@ -7,7 +7,17 @@ import (
 	"github.com/exsql-io/go-datastore/common"
 )
 
-type Store interface{}
+type InputFormatType string
+
+const (
+	Json InputFormatType = "json"
+)
+
+type CloseableIterator interface {
+	Next() bool
+	Value() *arrow.Record
+	Close()
+}
 
 func ToArrowSchema(schema *common.Schema) (*arrow.Schema, error) {
 	var arrowFields []arrow.Field

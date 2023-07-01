@@ -2,20 +2,15 @@ package main
 
 import (
 	"github.com/exsql-io/go-datastore/common"
+	"github.com/exsql-io/go-datastore/store"
 	"gopkg.in/yaml.v3"
 	"os"
 )
 
-type FormatType string
-
-const (
-	Json FormatType = "json"
-)
-
 type Stream struct {
-	Topic  string        `yaml:"topic"`
-	Format FormatType    `yaml:"format"`
-	Schema common.Schema `yaml:"schema"`
+	Topic  string                `yaml:"topic"`
+	Format store.InputFormatType `yaml:"format"`
+	Schema common.Schema         `yaml:"schema"`
 }
 
 type Configuration struct {
