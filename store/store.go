@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"github.com/apache/arrow/go/v13/arrow"
+	"github.com/apache/arrow/go/v13/arrow/array"
+	"github.com/apache/arrow/go/v13/arrow/compute"
 	"github.com/exsql-io/go-datastore/common"
 )
 
@@ -19,11 +21,40 @@ type CloseableIterator interface {
 	Close()
 }
 
+type arrowTableCloseableIterator struct {
+	table  *arrow.Table
+	reader *array.TableReader
+}
+
+func (iterator arrowTableCloseableIterator) Next() bool {
+	return iterator.reader.Next()
+}
+
+func (iterator arrowTableCloseableIterator) Value() *arrow.Record {
+	record := iterator.reader.Record()
+	return &record
+}
+
+func (iterator arrowTableCloseableIterator) Close() {
+	iterator.reader.Release()
+	(*iterator.table).Release()
+}
+
+func NewArrowTableCloseableIterator(table *arrow.Table, reader *array.TableReader) *CloseableIterator {
+	var iterator CloseableIterator
+	iterator = arrowTableCloseableIterator{table, reader}
+
+	return &iterator
+}
+
+type Filter func(compute.Datum) (compute.Datum, error)
+
 type Store interface {
 	Get(key []byte) []byte
 	Put(offset int64, key []byte, value []byte)
-	Iterator() (*CloseableIterator, error)
 	Close()
+	Iterator(filter ...Filter) (*CloseableIterator, error)
+	Schema() *arrow.Schema
 }
 
 func ToArrowSchema(schema *common.Schema) (*arrow.Schema, error) {

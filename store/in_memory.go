@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/apache/arrow/go/v13/arrow"
 	"github.com/apache/arrow/go/v13/arrow/array"
+	"github.com/apache/arrow/go/v13/arrow/compute"
 	"github.com/apache/arrow/go/v13/arrow/memory"
 	"github.com/exsql-io/go-datastore/common"
 )
@@ -54,59 +55,49 @@ func (store InMemoryStore) Put(offset int64, key []byte, value []byte) {
 	store.keyLookup[string(key)] = offset
 }
 
-func (store InMemoryStore) Iterator() (*CloseableIterator, error) {
-	table, reader, err := store.reader()
+func (store InMemoryStore) Iterator(filter ...Filter) (*CloseableIterator, error) {
+	table, err := store.table()
 	if err != nil {
 		return nil, err
 	}
 
-	var iterator CloseableIterator
-	iterator = inMemoryStoreCloseableIterator{
-		table:  table,
-		reader: reader,
+	if len(filter) == 1 {
+		datum, err := filter[0](compute.NewDatum(*table))
+		if err != nil {
+			return nil, err
+		}
+
+		tableDatum := datum.(*compute.TableDatum)
+
+		reader := array.NewTableReader(tableDatum.Value, 64)
+		return NewArrowTableCloseableIterator(&tableDatum.Value, reader), nil
 	}
 
-	return &iterator, nil
+	reader := array.NewTableReader(*table, 64)
+	return NewArrowTableCloseableIterator(table, reader), nil
 }
 
 func (store InMemoryStore) Close() {}
+
+func (store InMemoryStore) Schema() *arrow.Schema {
+	return store.schema
+}
 
 func (store InMemoryStore) getOffsetFromKey(key []byte) (int64, bool) {
 	offset, ok := store.keyLookup[string(key)]
 	return offset, ok
 }
 
-type inMemoryStoreCloseableIterator struct {
-	table  *arrow.Table
-	reader *array.TableReader
-}
-
-func (iterator inMemoryStoreCloseableIterator) Next() bool {
-	return iterator.reader.Next()
-}
-
-func (iterator inMemoryStoreCloseableIterator) Value() *arrow.Record {
-	record := iterator.reader.Record()
-	return &record
-}
-
-func (iterator inMemoryStoreCloseableIterator) Close() {
-	iterator.reader.Release()
-	(*iterator.table).Release()
-}
-
-func (store InMemoryStore) reader() (*arrow.Table, *array.TableReader, error) {
+func (store InMemoryStore) table() (*arrow.Table, error) {
 	record, err := store.inMemoryToRecords()
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	var table arrow.Table
 	table = array.NewTableFromRecords(store.schema, []arrow.Record{*record})
 
-	reader := array.NewTableReader(table, 64)
-
-	return &table, reader, nil
+	return &table, nil
 }
 
 func (store InMemoryStore) inMemoryToRecords() (*arrow.Record, error) {
