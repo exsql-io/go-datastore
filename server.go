@@ -4,10 +4,12 @@ import (
 	"context"
 	"github.com/apache/arrow/go/v13/arrow/compute"
 	"github.com/apache/arrow/go/v13/arrow/compute/exprs"
+	"github.com/apache/arrow/go/v13/arrow/memory"
 	"github.com/exsql-io/go-datastore/services"
 	"github.com/exsql-io/go-datastore/store"
 	"github.com/labstack/echo/v4"
 	"github.com/substrait-io/substrait-go/expr"
+	"log"
 	"net/http"
 	"os"
 )
@@ -38,8 +40,13 @@ func main() {
 	e := echo.New()
 	e.GET("/streams/:topic", func(context echo.Context) error { return getStream(leaf, context) })
 	e.GET("/streams/:topic/query/:name", func(context echo.Context) error {
-		name := context.Param("key")
-		return query(leaf, name, context)
+		name := context.Param("name")
+		err := query(leaf, name, context)
+		if err != nil {
+			log.Println(err.Error())
+		}
+
+		return err
 	})
 
 	e.GET("/streams/:topic/:key", func(context echo.Context) error { return getStreamValueByKey(leaf, context) })
@@ -88,7 +95,8 @@ func query(leaf *services.Leaf, name string, echoContext echo.Context) error {
 	}
 
 	iterator, err := (*leaf.Store).Iterator(func(input compute.Datum) (compute.Datum, error) {
-		return exprs.ExecuteScalarExpression(context.Background(), schema, ex, input)
+		ctx := exprs.WithExtensionIDSet(compute.WithAllocator(context.Background(), memory.DefaultAllocator), extensionSet)
+		return exprs.ExecuteScalarExpression(ctx, schema, ex, input)
 	})
 
 	if err != nil {

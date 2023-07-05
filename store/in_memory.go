@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"github.com/apache/arrow/go/v13/arrow"
@@ -56,25 +57,30 @@ func (store InMemoryStore) Put(offset int64, key []byte, value []byte) {
 }
 
 func (store InMemoryStore) Iterator(filter ...Filter) (*CloseableIterator, error) {
-	table, err := store.table()
+	records, err := store.inMemoryToRecords()
 	if err != nil {
 		return nil, err
 	}
 
 	if len(filter) == 1 {
-		datum, err := filter[0](compute.NewDatum(*table))
+		recordDatum := compute.NewDatum(records)
+		datum, err := filter[0](recordDatum)
 		if err != nil {
 			return nil, err
 		}
 
-		tableDatum := datum.(*compute.TableDatum)
+		dtm := datum.(*compute.ArrayDatum)
 
-		reader := array.NewTableReader(tableDatum.Value, 64)
-		return NewArrowTableCloseableIterator(&tableDatum.Value, reader), nil
+		recs, err := compute.FilterRecordBatch(context.Background(), records, dtm.MakeArray(), compute.DefaultFilterOptions())
+
+		tbl := table(store.schema, &recs)
+		reader := array.NewTableReader(tbl, 64)
+		return NewArrowTableCloseableIterator(&tbl, reader), nil
 	}
 
-	reader := array.NewTableReader(*table, 64)
-	return NewArrowTableCloseableIterator(table, reader), nil
+	tbl := table(store.schema, &records)
+	reader := array.NewTableReader(tbl, 64)
+	return NewArrowTableCloseableIterator(&tbl, reader), nil
 }
 
 func (store InMemoryStore) Close() {}
@@ -88,19 +94,14 @@ func (store InMemoryStore) getOffsetFromKey(key []byte) (int64, bool) {
 	return offset, ok
 }
 
-func (store InMemoryStore) table() (*arrow.Table, error) {
-	record, err := store.inMemoryToRecords()
-	if err != nil {
-		return nil, err
-	}
-
+func table(schema *arrow.Schema, records *arrow.Record) arrow.Table {
 	var table arrow.Table
-	table = array.NewTableFromRecords(store.schema, []arrow.Record{*record})
+	table = array.NewTableFromRecords(schema, []arrow.Record{*records})
 
-	return &table, nil
+	return table
 }
 
-func (store InMemoryStore) inMemoryToRecords() (*arrow.Record, error) {
+func (store InMemoryStore) inMemoryToRecords() (arrow.Record, error) {
 	builder := array.NewRecordBuilder(*store.allocator, store.schema)
 	defer builder.Release()
 
@@ -114,7 +115,7 @@ func (store InMemoryStore) inMemoryToRecords() (*arrow.Record, error) {
 		}
 
 		record := builder.NewRecord()
-		return &record, nil
+		return record, nil
 	}
 
 	return nil, errors.New(fmt.Sprintf("unsupported inputFormatType: '%s'", store.inputFormatType))
