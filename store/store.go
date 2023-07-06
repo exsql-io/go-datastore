@@ -7,6 +7,7 @@ import (
 	"github.com/apache/arrow/go/v13/arrow/array"
 	"github.com/apache/arrow/go/v13/arrow/compute"
 	"github.com/exsql-io/go-datastore/common"
+	"github.com/substrait-io/substrait-go/types"
 )
 
 type InputFormatType string
@@ -55,6 +56,7 @@ type Store interface {
 	Close()
 	Iterator(filter ...Filter) (*CloseableIterator, error)
 	Schema() *arrow.Schema
+	NamedStruct() types.NamedStruct
 }
 
 func ToArrowSchema(schema *common.Schema) (*arrow.Schema, error) {

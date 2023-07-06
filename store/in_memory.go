@@ -9,6 +9,7 @@ import (
 	"github.com/apache/arrow/go/v13/arrow/compute"
 	"github.com/apache/arrow/go/v13/arrow/memory"
 	"github.com/exsql-io/go-datastore/common"
+	"github.com/substrait-io/substrait-go/types"
 )
 
 type InMemoryStore struct {
@@ -87,6 +88,35 @@ func (store InMemoryStore) Close() {}
 
 func (store InMemoryStore) Schema() *arrow.Schema {
 	return store.schema
+}
+
+func (store InMemoryStore) NamedStruct() types.NamedStruct {
+	var n []string
+	var t []types.Type
+
+	for _, field := range store.schema.Fields() {
+		n = append(n, field.Name)
+		t = append(t, toType(field.Type))
+	}
+
+	return types.NamedStruct{
+		Names: n,
+		Struct: types.StructType{
+			Nullability: types.NullabilityRequired,
+			Types:       t,
+		},
+	}
+}
+
+func toType(dataType arrow.DataType) types.Type {
+	switch dataType {
+	case arrow.PrimitiveTypes.Int32:
+		return &types.Int32Type{Nullability: types.NullabilityRequired}
+	case arrow.BinaryTypes.String:
+		return &types.StringType{Nullability: types.NullabilityRequired}
+	}
+
+	return nil
 }
 
 func (store InMemoryStore) getOffsetFromKey(key []byte) (int64, bool) {
