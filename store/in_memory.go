@@ -1,12 +1,15 @@
 package store
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"github.com/apache/arrow/go/v13/arrow"
 	"github.com/apache/arrow/go/v13/arrow/array"
+	"github.com/apache/arrow/go/v13/arrow/compute"
 	"github.com/apache/arrow/go/v13/arrow/memory"
 	"github.com/exsql-io/go-datastore/common"
+	"github.com/substrait-io/substrait-go/types"
 )
 
 type InMemoryStore struct {
@@ -54,62 +57,81 @@ func (store InMemoryStore) Put(offset int64, key []byte, value []byte) {
 	store.keyLookup[string(key)] = offset
 }
 
-func (store InMemoryStore) Iterator() (*CloseableIterator, error) {
-	table, reader, err := store.reader()
+func (store InMemoryStore) Iterator(filter ...Filter) (*CloseableIterator, error) {
+	records, err := store.inMemoryToRecords()
 	if err != nil {
 		return nil, err
 	}
 
-	var iterator CloseableIterator
-	iterator = inMemoryStoreCloseableIterator{
-		table:  table,
-		reader: reader,
+	if len(filter) == 1 {
+		recordDatum := compute.NewDatum(records)
+		datum, err := filter[0](recordDatum)
+		if err != nil {
+			return nil, err
+		}
+
+		dtm := datum.(*compute.ArrayDatum)
+
+		recs, err := compute.FilterRecordBatch(context.Background(), records, dtm.MakeArray(), compute.DefaultFilterOptions())
+
+		tbl := table(store.schema, &recs)
+		reader := array.NewTableReader(tbl, 64)
+		return NewArrowTableCloseableIterator(&tbl, reader), nil
 	}
 
-	return &iterator, nil
+	tbl := table(store.schema, &records)
+	reader := array.NewTableReader(tbl, 64)
+	return NewArrowTableCloseableIterator(&tbl, reader), nil
 }
 
 func (store InMemoryStore) Close() {}
+
+func (store InMemoryStore) Schema() *arrow.Schema {
+	return store.schema
+}
+
+func (store InMemoryStore) NamedStruct() types.NamedStruct {
+	var n []string
+	var t []types.Type
+
+	for _, field := range store.schema.Fields() {
+		n = append(n, field.Name)
+		t = append(t, toType(field.Type))
+	}
+
+	return types.NamedStruct{
+		Names: n,
+		Struct: types.StructType{
+			Nullability: types.NullabilityRequired,
+			Types:       t,
+		},
+	}
+}
+
+func toType(dataType arrow.DataType) types.Type {
+	switch dataType {
+	case arrow.PrimitiveTypes.Int32:
+		return &types.Int32Type{Nullability: types.NullabilityRequired}
+	case arrow.BinaryTypes.String:
+		return &types.StringType{Nullability: types.NullabilityRequired}
+	}
+
+	return nil
+}
 
 func (store InMemoryStore) getOffsetFromKey(key []byte) (int64, bool) {
 	offset, ok := store.keyLookup[string(key)]
 	return offset, ok
 }
 
-type inMemoryStoreCloseableIterator struct {
-	table  *arrow.Table
-	reader *array.TableReader
-}
-
-func (iterator inMemoryStoreCloseableIterator) Next() bool {
-	return iterator.reader.Next()
-}
-
-func (iterator inMemoryStoreCloseableIterator) Value() *arrow.Record {
-	record := iterator.reader.Record()
-	return &record
-}
-
-func (iterator inMemoryStoreCloseableIterator) Close() {
-	iterator.reader.Release()
-	(*iterator.table).Release()
-}
-
-func (store InMemoryStore) reader() (*arrow.Table, *array.TableReader, error) {
-	record, err := store.inMemoryToRecords()
-	if err != nil {
-		return nil, nil, err
-	}
-
+func table(schema *arrow.Schema, records *arrow.Record) arrow.Table {
 	var table arrow.Table
-	table = array.NewTableFromRecords(store.schema, []arrow.Record{*record})
+	table = array.NewTableFromRecords(schema, []arrow.Record{*records})
 
-	reader := array.NewTableReader(table, 64)
-
-	return &table, reader, nil
+	return table
 }
 
-func (store InMemoryStore) inMemoryToRecords() (*arrow.Record, error) {
+func (store InMemoryStore) inMemoryToRecords() (arrow.Record, error) {
 	builder := array.NewRecordBuilder(*store.allocator, store.schema)
 	defer builder.Release()
 
@@ -123,7 +145,7 @@ func (store InMemoryStore) inMemoryToRecords() (*arrow.Record, error) {
 		}
 
 		record := builder.NewRecord()
-		return &record, nil
+		return record, nil
 	}
 
 	return nil, errors.New(fmt.Sprintf("unsupported inputFormatType: '%s'", store.inputFormatType))
