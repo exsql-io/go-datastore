@@ -55,7 +55,6 @@ func main() {
 
 	e := echo.New()
 	e.GET("/streams/:name", func(context echo.Context) error { return getStream(leafs, context) })
-	e.GET("/streams/:name/:key", func(context echo.Context) error { return getStreamValueByKey(leafs, context) })
 	e.POST("/streams/sql", func(echoContext echo.Context) error {
 		body, err := io.ReadAll(echoContext.Request().Body)
 		if err != nil {
@@ -120,14 +119,6 @@ func getStream(leafs map[string]*services.Leaf, context echo.Context) error {
 	defer (*iterator).Close()
 
 	return iteratorResponse(iterator, context)
-}
-
-func getStreamValueByKey(leafs map[string]*services.Leaf, context echo.Context) error {
-	name := context.Param("name")
-	leaf := leafs[name]
-
-	value := (*leaf.Store).Get([]byte(context.Param("key")))
-	return context.JSONBlob(http.StatusOK, value)
 }
 
 func iteratorResponse(iterator *store.CloseableIterator, context echo.Context) error {

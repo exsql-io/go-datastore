@@ -1,12 +1,10 @@
 package store
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"github.com/apache/arrow/go/v13/arrow"
 	"github.com/apache/arrow/go/v13/arrow/array"
-	"github.com/apache/arrow/go/v13/arrow/compute"
 	"github.com/apache/arrow/go/v13/arrow/memory"
 	"github.com/exsql-io/go-datastore/common"
 	"github.com/substrait-io/substrait-go/types"
@@ -14,10 +12,11 @@ import (
 
 type InMemoryStore struct {
 	schema          *arrow.Schema
-	records         map[int64][]byte
-	keyLookup       map[string]int64
+	buffered        [][]byte
+	bufferIndex     int32
 	inputFormatType InputFormatType
 	allocator       *memory.Allocator
+	records         []arrow.Record
 }
 
 func NewInMemoryStore(allocator *memory.Allocator, inputFormatType InputFormatType, schema *common.Schema) (*Store, error) {
@@ -27,10 +26,10 @@ func NewInMemoryStore(allocator *memory.Allocator, inputFormatType InputFormatTy
 	}
 
 	var store Store
-	store = InMemoryStore{
+	store = &InMemoryStore{
 		schema:          arrowSchema,
-		records:         map[int64][]byte{},
-		keyLookup:       map[string]int64{},
+		buffered:        make([][]byte, 4096),
+		bufferIndex:     0,
 		inputFormatType: inputFormatType,
 		allocator:       allocator,
 	}
@@ -38,59 +37,38 @@ func NewInMemoryStore(allocator *memory.Allocator, inputFormatType InputFormatTy
 	return &store, nil
 }
 
-func (store InMemoryStore) Get(key []byte) []byte {
-	offset, ok := store.getOffsetFromKey(key)
-	if !ok {
-		return nil
+func (store *InMemoryStore) Put(_ int64, _ []byte, value []byte) error {
+	store.buffered[store.bufferIndex] = value
+	store.bufferIndex += 1
+
+	if store.bufferIndex == 1024 {
+		err := store.flushBuffer()
+		if err != nil {
+			return err
+		}
+
+		store.bufferIndex = 0
 	}
 
-	value, ok := store.records[offset]
-	if !ok {
-		return nil
-	}
-
-	return value
+	return nil
 }
 
-func (store InMemoryStore) Put(offset int64, key []byte, value []byte) {
-	store.records[offset] = value
-	store.keyLookup[string(key)] = offset
-}
-
-func (store InMemoryStore) Iterator(filter ...Filter) (*CloseableIterator, error) {
-	records, err := store.inMemoryToRecords()
+func (store *InMemoryStore) Iterator(filter ...Filter) (*CloseableIterator, error) {
+	inMemoryRecords, err := store.inMemoryToRecords()
 	if err != nil {
 		return nil, err
 	}
 
-	if len(filter) == 1 {
-		recordDatum := compute.NewDatum(records)
-		datum, err := filter[0](recordDatum)
-		if err != nil {
-			return nil, err
-		}
-
-		dtm := datum.(*compute.ArrayDatum)
-
-		recs, err := compute.FilterRecordBatch(context.Background(), records, dtm.MakeArray(), compute.DefaultFilterOptions())
-
-		tbl := table(store.schema, &recs)
-		reader := array.NewTableReader(tbl, 64)
-		return NewArrowTableCloseableIterator(&tbl, reader), nil
-	}
-
-	tbl := table(store.schema, &records)
-	reader := array.NewTableReader(tbl, 64)
-	return NewArrowTableCloseableIterator(&tbl, reader), nil
+	return NewArrowTableCloseableIterator(filter, inMemoryRecords, store.records), nil
 }
 
-func (store InMemoryStore) Close() {}
+func (store *InMemoryStore) Close() {}
 
-func (store InMemoryStore) Schema() *arrow.Schema {
+func (store *InMemoryStore) Schema() *arrow.Schema {
 	return store.schema
 }
 
-func (store InMemoryStore) NamedStruct() types.NamedStruct {
+func (store *InMemoryStore) NamedStruct() types.NamedStruct {
 	var n []string
 	var t []types.Type
 
@@ -119,26 +97,21 @@ func toType(dataType arrow.DataType) types.Type {
 	return nil
 }
 
-func (store InMemoryStore) getOffsetFromKey(key []byte) (int64, bool) {
-	offset, ok := store.keyLookup[string(key)]
-	return offset, ok
-}
-
-func table(schema *arrow.Schema, records *arrow.Record) arrow.Table {
+func table(schema *arrow.Schema, records []arrow.Record) arrow.Table {
 	var table arrow.Table
-	table = array.NewTableFromRecords(schema, []arrow.Record{*records})
+	table = array.NewTableFromRecords(schema, records)
 
 	return table
 }
 
-func (store InMemoryStore) inMemoryToRecords() (arrow.Record, error) {
+func (store *InMemoryStore) inMemoryToRecords() (arrow.Record, error) {
 	builder := array.NewRecordBuilder(*store.allocator, store.schema)
 	defer builder.Release()
 
 	switch store.inputFormatType {
 	case Json:
-		for _, value := range store.records {
-			err := builder.UnmarshalJSON(value)
+		for index := int32(0); index < store.bufferIndex; index++ {
+			err := builder.UnmarshalJSON(store.buffered[index])
 			if err != nil {
 				return nil, err
 			}
@@ -149,4 +122,14 @@ func (store InMemoryStore) inMemoryToRecords() (arrow.Record, error) {
 	}
 
 	return nil, errors.New(fmt.Sprintf("unsupported inputFormatType: '%s'", store.inputFormatType))
+}
+
+func (store *InMemoryStore) flushBuffer() error {
+	record, err := store.inMemoryToRecords()
+	if err != nil {
+		return err
+	}
+
+	store.records = append(store.records, record)
+	return nil
 }

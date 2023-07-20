@@ -2,7 +2,6 @@ package services
 
 import (
 	"context"
-	"errors"
 	"github.com/apache/arrow/go/v13/arrow/memory"
 	"github.com/exsql-io/go-datastore/common"
 	"github.com/exsql-io/go-datastore/store"
@@ -53,10 +52,11 @@ func (leaf *Leaf) process() {
 			for _, err := range message.Errors {
 				log.Fatalln(err)
 			}
-
-			panic(errors.New("an error occurred while consuming topic"))
 		}
 
-		(*leaf.Store).Put(message.Record.Offset, message.Record.Key, message.Record.Value)
+		err := (*leaf.Store).Put(message.Record.Offset, message.Record.Key, message.Record.Value)
+		if err != nil {
+			log.Fatalln(err)
+		}
 	}
 }
