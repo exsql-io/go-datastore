@@ -10,6 +10,7 @@ import (
 )
 
 type Leaf struct {
+	Name      string
 	Schema    common.Schema
 	IsRunning bool
 	Store     *store.Store
@@ -17,7 +18,7 @@ type Leaf struct {
 	context   context.Context
 }
 
-func NewLeaf(schema common.Schema, inputFormatType store.InputFormatType, input *chan Message) (*Leaf, error) {
+func NewLeaf(name string, schema common.Schema, inputFormatType store.InputFormatType, input *chan Message) (*Leaf, error) {
 	ctx := context.Background()
 	allocator := memory.DefaultAllocator
 	s, err := store.NewInMemoryStore(&allocator, inputFormatType, &schema)
@@ -26,6 +27,7 @@ func NewLeaf(schema common.Schema, inputFormatType store.InputFormatType, input 
 	}
 
 	leaf := Leaf{
+		Name:      name,
 		Schema:    schema,
 		IsRunning: false,
 		input:     input,
