@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"github.com/apache/arrow/go/v13/arrow"
@@ -8,6 +9,7 @@ import (
 	"github.com/apache/arrow/go/v13/arrow/compute"
 	"github.com/exsql-io/go-datastore/common"
 	"github.com/substrait-io/substrait-go/types"
+	"log"
 )
 
 type InputFormatType string
@@ -23,27 +25,110 @@ type CloseableIterator interface {
 }
 
 type arrowTableCloseableIterator struct {
-	table  *arrow.Table
-	reader *array.TableReader
+	ctx             context.Context
+	filters         []Filter
+	schema          *arrow.Schema
+	inMemoryRecords arrow.Record
+	records         []arrow.Record
+	position        int
+	table           arrow.Table
+	reader          *array.TableReader
 }
 
-func (iterator arrowTableCloseableIterator) Next() bool {
-	return iterator.reader.Next()
+func (iterator *arrowTableCloseableIterator) Next() bool {
+	if iterator.reader == nil {
+		hasNext, err := iterator.prepareNextNonEmptyBatch()
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		if hasNext {
+			return true
+		}
+	}
+
+	if iterator.reader.Next() {
+		return true
+	}
+
+	iterator.reader.Release()
+	iterator.table.Release()
+
+	hasNext, err := iterator.prepareNextNonEmptyBatch()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	return hasNext
 }
 
-func (iterator arrowTableCloseableIterator) Value() *arrow.Record {
+func (iterator *arrowTableCloseableIterator) Value() *arrow.Record {
 	record := iterator.reader.Record()
 	return &record
 }
 
-func (iterator arrowTableCloseableIterator) Close() {
+func (iterator *arrowTableCloseableIterator) Close() {
 	iterator.reader.Release()
-	(*iterator.table).Release()
+	iterator.table.Release()
 }
 
-func NewArrowTableCloseableIterator(table *arrow.Table, reader *array.TableReader) *CloseableIterator {
+func (iterator *arrowTableCloseableIterator) prepareNextNonEmptyBatch() (bool, error) {
+	if iterator.reader == nil {
+		records, err := iterator.applyFilters(iterator.inMemoryRecords)
+		if err != nil {
+			return false, err
+		}
+
+		iterator.table = table(iterator.schema, []arrow.Record{records})
+		iterator.reader = array.NewTableReader(iterator.table, 0)
+	}
+
+	for !iterator.reader.Next() {
+		iterator.position -= 1
+		if iterator.position < 0 {
+			return false, nil
+		}
+
+		records, err := iterator.applyFilters(iterator.records[iterator.position])
+		if err != nil {
+			return false, err
+		}
+
+		iterator.table = table(iterator.schema, []arrow.Record{records})
+		iterator.reader = array.NewTableReader(iterator.table, 0)
+	}
+
+	return true, nil
+}
+
+func (iterator *arrowTableCloseableIterator) applyFilters(records arrow.Record) (arrow.Record, error) {
+	if len(iterator.filters) == 0 {
+		return records, nil
+	}
+
+	recordDatum := compute.NewDatum(records)
+	datum, err := iterator.filters[0](recordDatum)
+	if err != nil {
+		return nil, err
+	}
+
+	dtm := datum.(*compute.ArrayDatum)
+
+	return compute.FilterRecordBatch(iterator.ctx, records, dtm.MakeArray(), compute.DefaultFilterOptions())
+}
+
+func NewArrowTableCloseableIterator(filters []Filter, inMemoryRecords arrow.Record, records []arrow.Record) *CloseableIterator {
 	var iterator CloseableIterator
-	iterator = arrowTableCloseableIterator{table, reader}
+	iterator = &arrowTableCloseableIterator{
+		ctx:             context.Background(),
+		filters:         filters,
+		schema:          inMemoryRecords.Schema(),
+		inMemoryRecords: inMemoryRecords,
+		records:         records,
+		position:        len(records),
+		table:           nil,
+		reader:          nil,
+	}
 
 	return &iterator
 }
@@ -51,8 +136,7 @@ func NewArrowTableCloseableIterator(table *arrow.Table, reader *array.TableReade
 type Filter func(compute.Datum) (compute.Datum, error)
 
 type Store interface {
-	Get(key []byte) []byte
-	Put(offset int64, key []byte, value []byte)
+	Put(offset int64, key []byte, value []byte) error
 	Close()
 	Iterator(filter ...Filter) (*CloseableIterator, error)
 	Schema() *arrow.Schema
