@@ -7,8 +7,11 @@ import (
 	"github.com/apache/arrow/go/v13/arrow/array"
 	"github.com/apache/arrow/go/v13/arrow/memory"
 	"github.com/exsql-io/go-datastore/common"
+	"github.com/exsql-io/go-datastore/engine"
 	"github.com/substrait-io/substrait-go/types"
 )
+
+var DefaultGroupSize int32 = 4096
 
 type InMemoryStore struct {
 	schema          *arrow.Schema
@@ -28,7 +31,7 @@ func NewInMemoryStore(allocator *memory.Allocator, inputFormatType InputFormatTy
 	var store Store
 	store = &InMemoryStore{
 		schema:          arrowSchema,
-		buffered:        make([][]byte, 4096),
+		buffered:        make([][]byte, DefaultGroupSize),
 		bufferIndex:     0,
 		inputFormatType: inputFormatType,
 		allocator:       allocator,
@@ -41,7 +44,7 @@ func (store *InMemoryStore) Put(_ int64, _ []byte, value []byte) error {
 	store.buffered[store.bufferIndex] = value
 	store.bufferIndex += 1
 
-	if store.bufferIndex == 1024 {
+	if store.bufferIndex == DefaultGroupSize {
 		err := store.flushBuffer()
 		if err != nil {
 			return err
@@ -53,13 +56,13 @@ func (store *InMemoryStore) Put(_ int64, _ []byte, value []byte) error {
 	return nil
 }
 
-func (store *InMemoryStore) Iterator(filter ...Filter) (*CloseableIterator, error) {
+func (store *InMemoryStore) Iterator() (*engine.CloseableIterator, error) {
 	inMemoryRecords, err := store.inMemoryToRecords()
 	if err != nil {
 		return nil, err
 	}
 
-	return NewArrowTableCloseableIterator(filter, inMemoryRecords, store.records), nil
+	return NewArrowTableCloseableIterator(inMemoryRecords, store.records), nil
 }
 
 func (store *InMemoryStore) Close() {}
