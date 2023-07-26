@@ -95,6 +95,12 @@ func toType(dataType arrow.DataType) types.Type {
 	switch dataType {
 	case arrow.PrimitiveTypes.Int32:
 		return &types.Int32Type{Nullability: types.NullabilityRequired}
+	case arrow.PrimitiveTypes.Int64:
+		return &types.Int64Type{Nullability: types.NullabilityRequired}
+	case arrow.PrimitiveTypes.Float64:
+		return &types.Float64Type{Nullability: types.NullabilityRequired}
+	case arrow.PrimitiveTypes.Date32:
+		return &types.DateType{Nullability: types.NullabilityRequired}
 	case arrow.BinaryTypes.String:
 		return &types.StringType{Nullability: types.NullabilityRequired}
 	}
@@ -123,25 +129,26 @@ func (store *InMemoryStore) inMemoryToRecords() (arrow.Record, error) {
 		}
 
 		record := builder.NewRecord()
+		record.Retain()
+
+		builder.Release()
+
 		return record, nil
-	case PSV:
-		psvReader := csv.NewReader(
+	case CSV:
+		reader := csv.NewReader(
 			bytes.NewReader(bytes.Join(store.buffered, []byte("\n"))),
 			store.schema,
-			csv.WithComma('|'),
 			csv.WithChunk(int(DefaultGroupSize)),
 			csv.WithHeader(false))
 
-		if !psvReader.Next() {
+		if !reader.Next() {
 			return nil, errors.New("unable to process in memory batch")
 		}
 
-		if psvReader.Err() != nil {
-			return nil, psvReader.Err()
-		}
+		record := reader.Record()
+		record.Retain()
 
-		record := psvReader.Record()
-		psvReader.Release()
+		reader.Release()
 
 		return record, nil
 	}

@@ -63,7 +63,7 @@ func TestLoadConfiguration(t *testing.T) {
 				},
 				{
 					topic:  "tpch-lineitems",
-					format: store.PSV,
+					format: store.CSV,
 					assertions: []common.FieldAssertion{
 						func(t *testing.T, schema *common.Schema, index int) {
 							schema.AssertField(t, index, "orderkey", false, common.Type{Name: common.LongType})

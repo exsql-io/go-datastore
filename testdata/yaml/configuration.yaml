@@ -47,7 +47,7 @@ streams:
           type:
             name: double
   - topic: tpch-lineitems
-    format: psv
+    format: csv
     schema:
       fields:
         - name: orderkey

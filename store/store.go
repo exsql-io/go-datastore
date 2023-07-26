@@ -18,7 +18,7 @@ type InputFormatType string
 
 const (
 	Json InputFormatType = "json"
-	PSV  InputFormatType = "psv"
+	CSV  InputFormatType = "csv"
 )
 
 type arrowTableCloseableIterator struct {

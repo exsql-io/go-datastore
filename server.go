@@ -222,7 +222,8 @@ func planFromSql(leafs map[string]*services.Leaf, sql string) (*plan.Plan, error
 				return nil, err
 			}
 
-			p, err := builder.Plan(rel, toColumnNames(stm.SelectExprs))
+			rootNames := toColumnNames(stm.SelectExprs)
+			p, err := builder.Plan(rel, rootNames)
 			if err != nil {
 				return nil, err
 			}
@@ -300,13 +301,23 @@ func toArg(builder plan.Builder, scan *plan.NamedTableReadRel, sqlExpr sqlparser
 
 func toColumnNames(selectExprs sqlparser.SelectExprs) []string {
 	columns := make([]string, len(selectExprs))
-	for _, e := range selectExprs {
+	for index, e := range selectExprs {
 		switch column := e.(type) {
+		case *sqlparser.AliasedExpr:
+			switch literal := column.Expr.(type) {
+			case *sqlparser.ColName:
+				columns[index] = literal.CompliantName()
+				break
+			}
+			break
+
 		case *sqlparser.Nextval:
 			switch literal := column.Expr.(type) {
 			case *sqlparser.Literal:
-				columns = append(columns, literal.Val)
+				columns[index] = literal.Val
+				break
 			}
+			break
 		}
 	}
 
