@@ -4,11 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/apache/arrow/go/v13/arrow"
 	"github.com/apache/arrow/go/v13/arrow/compute"
 	"github.com/apache/arrow/go/v13/arrow/compute/exprs"
 	"github.com/apache/arrow/go/v13/arrow/memory"
+	"github.com/exsql-io/go-datastore/engine"
 	"github.com/exsql-io/go-datastore/services"
-	"github.com/exsql-io/go-datastore/store"
 	"github.com/goccy/go-json"
 	"github.com/labstack/echo/v4"
 	"github.com/substrait-io/substrait-go/expr"
@@ -53,6 +54,8 @@ func main() {
 		leafs[stream.Topic] = leaf
 	}
 
+	volcanoEngine := engine.VolcanoEngine{}
+
 	e := echo.New()
 	e.GET("/streams/:name", func(context echo.Context) error { return getStream(leafs, context) })
 	e.POST("/streams/sql", func(echoContext echo.Context) error {
@@ -74,32 +77,15 @@ func main() {
 			return err
 		}
 
-		filter, err := extractFilterFromPlan(p)
+		operator, err := convertPlanToVolcanoOperator(leafs, p)
 		if err != nil {
 			return err
 		}
 
-		s := leafs[filter.Input().(*plan.NamedTableReadRel).Names()[0]].Store
-
-		extensionSet := exprs.NewExtensionSet(p.ExtensionRegistry(), exprs.DefaultExtensionIDRegistry)
-		extended := &expr.Extended{
-			Extensions: extensionSet.GetSubstraitRegistry().Set,
-			ReferredExpr: []expr.ExpressionReference{
-				expr.NewExpressionReference([]string{"out"}, filter.Condition()),
-			},
-			BaseSchema: (*s).NamedStruct(),
-		}
-
-		iterator, err := (*s).Iterator(func(input compute.Datum) (compute.Datum, error) {
-			ctx := exprs.WithExtensionIDSet(compute.WithAllocator(context.Background(), memory.DefaultAllocator), extensionSet)
-			return exprs.ExecuteScalarSubstrait(ctx, extended, input)
-		})
-
+		iterator, err := volcanoEngine.Process(operator)
 		if err != nil {
 			return err
 		}
-
-		defer (*iterator).Close()
 
 		return iteratorResponse(iterator, echoContext)
 	})
@@ -121,7 +107,9 @@ func getStream(leafs map[string]*services.Leaf, context echo.Context) error {
 	return iteratorResponse(iterator, context)
 }
 
-func iteratorResponse(iterator *store.CloseableIterator, context echo.Context) error {
+func iteratorResponse(iterator *engine.CloseableIterator, context echo.Context) error {
+	defer (*iterator).Close()
+
 	context.Response().Header().Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 	context.Response().WriteHeader(http.StatusOK)
 
@@ -150,6 +138,48 @@ func iteratorResponse(iterator *store.CloseableIterator, context echo.Context) e
 	}
 
 	return nil
+}
+
+func convertPlanToVolcanoOperator(leafs map[string]*services.Leaf, p *plan.Plan) (*engine.VolcanoOperator, error) {
+	filter, err := extractFilterFromPlan(p)
+	if err != nil {
+		return nil, err
+	}
+
+	s := leafs[filter.Input().(*plan.NamedTableReadRel).Names()[0]].Store
+	iterator, err := (*s).Iterator()
+	if err != nil {
+		return nil, err
+	}
+
+	var scanOperator engine.VolcanoOperator
+	scanOperator = engine.NewVolcanoScan(iterator)
+
+	extensionSet := exprs.NewExtensionSet(p.ExtensionRegistry(), exprs.DefaultExtensionIDRegistry)
+	extended := &expr.Extended{
+		Extensions: extensionSet.GetSubstraitRegistry().Set,
+		ReferredExpr: []expr.ExpressionReference{
+			expr.NewExpressionReference([]string{"out"}, filter.Condition()),
+		},
+		BaseSchema: (*s).NamedStruct(),
+	}
+
+	ctx := exprs.WithExtensionIDSet(compute.WithAllocator(context.Background(), memory.DefaultAllocator), extensionSet)
+
+	var filterOperator engine.VolcanoOperator
+	filterOperator = engine.NewVolcanoFilter(&scanOperator, func(batch engine.ColumnarBatch) engine.ColumnarBatch {
+		var records arrow.Record
+		records = *batch
+
+		recordDatum := compute.NewDatum(records)
+		selector, _ := exprs.ExecuteScalarSubstrait(ctx, extended, recordDatum)
+		dtm := selector.(*compute.ArrayDatum)
+
+		filtered, _ := compute.FilterRecordBatch(ctx, *batch, dtm.MakeArray(), compute.DefaultFilterOptions())
+		return &filtered
+	})
+
+	return &filterOperator, nil
 }
 
 func extractFilterFromPlan(p *plan.Plan) (*plan.FilterRel, error) {
