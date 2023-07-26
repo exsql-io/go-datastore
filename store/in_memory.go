@@ -1,10 +1,12 @@
 package store
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"github.com/apache/arrow/go/v13/arrow"
 	"github.com/apache/arrow/go/v13/arrow/array"
+	"github.com/apache/arrow/go/v13/arrow/csv"
 	"github.com/apache/arrow/go/v13/arrow/memory"
 	"github.com/exsql-io/go-datastore/common"
 	"github.com/exsql-io/go-datastore/engine"
@@ -121,6 +123,26 @@ func (store *InMemoryStore) inMemoryToRecords() (arrow.Record, error) {
 		}
 
 		record := builder.NewRecord()
+		return record, nil
+	case PSV:
+		psvReader := csv.NewReader(
+			bytes.NewReader(bytes.Join(store.buffered, []byte("\n"))),
+			store.schema,
+			csv.WithComma('|'),
+			csv.WithChunk(int(DefaultGroupSize)),
+			csv.WithHeader(false))
+
+		if !psvReader.Next() {
+			return nil, errors.New("unable to process in memory batch")
+		}
+
+		if psvReader.Err() != nil {
+			return nil, psvReader.Err()
+		}
+
+		record := psvReader.Record()
+		psvReader.Release()
+
 		return record, nil
 	}
 
