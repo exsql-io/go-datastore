@@ -21,6 +21,7 @@ const (
 	DoubleType    TypeName = "double"
 	BytesType     TypeName = "bytes"
 	Utf8Type      TypeName = "utf8"
+	DateType      TypeName = "date"
 	ArrayType     TypeName = "array"
 	StructureType TypeName = "structure"
 )
@@ -39,6 +40,7 @@ const (
 // - DoubleType
 // - BytesType
 // - Utf8Type
+// - DateType
 // and Values, Fields will be nil
 // or an ArrayType (TypeName will be ArrayType), Values will be another Type definition and Fields will be nil
 // or a StructureType (TypeName will be StructureType), Values will be nil and Fields will be set with the fields of the structure.

@@ -1,0 +1,65 @@
+fields:
+  - name: orderkey
+    nullable: false
+    type:
+      name: long
+  - name: partkey
+    nullable: false
+    type:
+      name: long
+  - name: suppkey
+    nullable: false
+    type:
+      name: long
+  - name: linenumber
+    nullable: false
+    type:
+      name: long
+  - name: quantity
+    nullable: false
+    type:
+      name: double
+  - name: extendedprice
+    nullable: false
+    type:
+      name: double
+  - name: discount
+    nullable: false
+    type:
+      name: double
+  - name: tax
+    nullable: false
+    type:
+      name: double
+  - name: returnflag
+    nullable: false
+    type:
+      name: utf8
+  - name: linestatus
+    nullable: false
+    type:
+      name: utf8
+  - name: shipdate
+    nullable: false
+    type:
+      name: date
+  - name: commitdate
+    nullable: false
+    type:
+      name: date
+  - name: receiptdate
+    nullable: false
+    type:
+      name: date
+  - name: shipinstruct
+    nullable: false
+    type:
+      name: utf8
+  - name: shipmode
+    nullable: false
+    type:
+      name: utf8
+  - name: comment
+    nullable: false
+    type:
+      name: utf8

@@ -7,7 +7,7 @@ import (
 )
 
 func TestToArrowSchema(t *testing.T) {
-	schema, err := common.FromYaml("../testdata/yaml/schema.yaml")
+	schema, err := common.FromYaml("../testdata/yaml/nyc-taxi-data-schema.yaml")
 	if err != nil {
 		t.Error(err)
 	}

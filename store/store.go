@@ -18,6 +18,7 @@ type InputFormatType string
 
 const (
 	Json InputFormatType = "json"
+	PSV  InputFormatType = "psv"
 )
 
 type arrowTableCloseableIterator struct {
@@ -160,6 +161,8 @@ func toArrowType(tpe common.Type) (arrow.DataType, error) {
 		return arrow.BinaryTypes.Binary, nil
 	case common.Utf8Type:
 		return arrow.BinaryTypes.String, nil
+	case common.DateType:
+		return arrow.PrimitiveTypes.Date32, nil
 	default:
 		return nil, errors.New(fmt.Sprintf("type: '%s' is not yet convertible to arrow type", tpe.Name))
 	}
