@@ -1,27 +1,15 @@
 package main
 
 import (
-	"context"
-	"errors"
-	"fmt"
-	"github.com/apache/arrow/go/v13/arrow"
-	"github.com/apache/arrow/go/v13/arrow/compute"
-	"github.com/apache/arrow/go/v13/arrow/compute/exprs"
-	"github.com/apache/arrow/go/v13/arrow/memory"
+	"github.com/exsql-io/go-datastore/common"
 	"github.com/exsql-io/go-datastore/engine"
 	"github.com/exsql-io/go-datastore/services"
 	"github.com/goccy/go-json"
 	"github.com/labstack/echo/v4"
-	"github.com/substrait-io/substrait-go/expr"
-	"github.com/substrait-io/substrait-go/plan"
-	"github.com/substrait-io/substrait-go/types"
-	"golang.org/x/exp/slices"
 	"io"
 	"log"
 	"net/http"
 	"os"
-	"strconv"
-	"vitess.io/vitess/go/vt/sqlparser"
 )
 
 func main() {
@@ -72,17 +60,12 @@ func main() {
 			return err
 		}
 
-		p, err := planFromSql(leafs, message["query"])
+		p, err := engine.Plan(leafs, message["query"])
 		if err != nil {
 			return err
 		}
 
-		operator, err := convertPlanToVolcanoOperator(leafs, p)
-		if err != nil {
-			return err
-		}
-
-		iterator, err := volcanoEngine.Process(operator)
+		iterator, err := volcanoEngine.Execute(leafs, p)
 		if err != nil {
 			return err
 		}
@@ -107,7 +90,7 @@ func getStream(leafs map[string]*services.Leaf, context echo.Context) error {
 	return iteratorResponse(iterator, context)
 }
 
-func iteratorResponse(iterator *engine.CloseableIterator, context echo.Context) error {
+func iteratorResponse(iterator *common.CloseableIterator, context echo.Context) error {
 	defer (*iterator).Close()
 
 	context.Response().Header().Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
@@ -138,188 +121,4 @@ func iteratorResponse(iterator *engine.CloseableIterator, context echo.Context) 
 	}
 
 	return nil
-}
-
-func convertPlanToVolcanoOperator(leafs map[string]*services.Leaf, p *plan.Plan) (*engine.VolcanoOperator, error) {
-	filter, err := extractFilterFromPlan(p)
-	if err != nil {
-		return nil, err
-	}
-
-	s := leafs[filter.Input().(*plan.NamedTableReadRel).Names()[0]].Store
-	iterator, err := (*s).Iterator()
-	if err != nil {
-		return nil, err
-	}
-
-	var scanOperator engine.VolcanoOperator
-	scanOperator = engine.NewVolcanoScan(iterator)
-
-	extensionSet := exprs.NewExtensionSet(p.ExtensionRegistry(), exprs.DefaultExtensionIDRegistry)
-	extended := &expr.Extended{
-		Extensions: extensionSet.GetSubstraitRegistry().Set,
-		ReferredExpr: []expr.ExpressionReference{
-			expr.NewExpressionReference([]string{"out"}, filter.Condition()),
-		},
-		BaseSchema: (*s).NamedStruct(),
-	}
-
-	ctx := exprs.WithExtensionIDSet(compute.WithAllocator(context.Background(), memory.DefaultAllocator), extensionSet)
-
-	var filterOperator engine.VolcanoOperator
-	filterOperator = engine.NewVolcanoFilter(&scanOperator, func(batch engine.ColumnarBatch) engine.ColumnarBatch {
-		var records arrow.Record
-		records = *batch
-
-		recordDatum := compute.NewDatum(records)
-		selector, _ := exprs.ExecuteScalarSubstrait(ctx, extended, recordDatum)
-		dtm := selector.(*compute.ArrayDatum)
-
-		filtered, _ := compute.FilterRecordBatch(ctx, *batch, dtm.MakeArray(), compute.DefaultFilterOptions())
-		return &filtered
-	})
-
-	return &filterOperator, nil
-}
-
-func extractFilterFromPlan(p *plan.Plan) (*plan.FilterRel, error) {
-	if len(p.Relations()) != 1 {
-		return nil, fmt.Errorf("expecting only one relation part of the plan got: %d", len(p.Relations()))
-	}
-
-	relation := p.Relations()[0]
-	if !relation.IsRoot() {
-		return nil, errors.New("expecting the plan relation to be a root one")
-	}
-
-	root := relation.Root()
-	rel := root.Input()
-
-	switch r := rel.(type) {
-	case *plan.FilterRel:
-		return r, nil
-	}
-
-	log.Printf("%+v\n", rel)
-
-	return nil, errors.New("not implemented")
-}
-
-func planFromSql(leafs map[string]*services.Leaf, sql string) (*plan.Plan, error) {
-	statement, err := sqlparser.Parse(sql)
-	if err != nil {
-		return nil, err
-	}
-
-	switch stm := statement.(type) {
-	case *sqlparser.Select:
-		switch condition := stm.Where.Expr.(type) {
-		case *sqlparser.ComparisonExpr:
-			leaf := leafs[stm.From[0].(*sqlparser.AliasedTableExpr).Expr.(sqlparser.TableName).Name.String()]
-			builder := plan.NewBuilderDefault()
-			rel, err := buildFilter(leaf, builder, condition)
-			if err != nil {
-				return nil, err
-			}
-
-			rootNames := toColumnNames(stm.SelectExprs)
-			p, err := builder.Plan(rel, rootNames)
-			if err != nil {
-				return nil, err
-			}
-
-			return p, nil
-		}
-	}
-
-	return nil, errors.New("not implemented")
-}
-
-func buildFilter(leaf *services.Leaf, builder plan.Builder, comparison *sqlparser.ComparisonExpr) (*plan.FilterRel, error) {
-	scan := builder.NamedScan([]string{leaf.Name}, (*leaf.Store).NamedStruct())
-
-	condition, err := toCondition(builder, scan, comparison)
-	if err != nil {
-		return nil, err
-	}
-
-	filter, err := builder.Filter(scan, condition)
-	if err != nil {
-		return nil, err
-	}
-
-	return filter, nil
-}
-
-func toCondition(builder plan.Builder, scan *plan.NamedTableReadRel, comparison *sqlparser.ComparisonExpr) (*expr.ScalarFunction, error) {
-	left, err := toArg(builder, scan, comparison.Left)
-	if err != nil {
-		return nil, err
-	}
-
-	right, err := toArg(builder, scan, comparison.Right)
-	if err != nil {
-		return nil, err
-	}
-
-	fn, err := builder.ScalarFn(
-		"https://github.com/substrait-io/substrait/blob/main/extensions/functions_comparison.yaml",
-		"equal",
-		nil,
-		left,
-		right,
-	)
-
-	if err != nil {
-		return nil, err
-	}
-
-	return fn, nil
-}
-
-func toArg(builder plan.Builder, scan *plan.NamedTableReadRel, sqlExpr sqlparser.Expr) (types.FuncArg, error) {
-	switch value := sqlExpr.(type) {
-	case *sqlparser.Literal:
-		switch value.Type {
-		case sqlparser.StrVal:
-			return expr.NewPrimitiveLiteral(value.Val, false), nil
-		case sqlparser.IntVal:
-			i, err := strconv.ParseInt(value.Val, 10, 32)
-			if err != nil {
-				return nil, err
-			}
-
-			return expr.NewPrimitiveLiteral(int32(i), false), nil
-		}
-	case *sqlparser.ColName:
-		index := slices.Index(scan.BaseSchema().Names, value.Name.String())
-		return builder.RootFieldRef(scan, int32(index))
-	}
-
-	return nil, errors.New("not implemented")
-}
-
-func toColumnNames(selectExprs sqlparser.SelectExprs) []string {
-	columns := make([]string, len(selectExprs))
-	for index, e := range selectExprs {
-		switch column := e.(type) {
-		case *sqlparser.AliasedExpr:
-			switch literal := column.Expr.(type) {
-			case *sqlparser.ColName:
-				columns[index] = literal.CompliantName()
-				break
-			}
-			break
-
-		case *sqlparser.Nextval:
-			switch literal := column.Expr.(type) {
-			case *sqlparser.Literal:
-				columns[index] = literal.Val
-				break
-			}
-			break
-		}
-	}
-
-	return columns
 }

@@ -1,31 +1,36 @@
 package engine
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"github.com/apache/arrow/go/v13/arrow"
+	"github.com/apache/arrow/go/v13/arrow/compute"
+	"github.com/apache/arrow/go/v13/arrow/compute/exprs"
+	"github.com/apache/arrow/go/v13/arrow/memory"
+	"github.com/exsql-io/go-datastore/common"
+	"github.com/exsql-io/go-datastore/services"
+	"github.com/substrait-io/substrait-go/expr"
+	"github.com/substrait-io/substrait-go/plan"
+	"log"
 )
-
-type ColumnarBatch *arrow.Record
-
-type CloseableIterator interface {
-	Next() bool
-	Value() ColumnarBatch
-	Close()
-}
-
-var EOB = errors.New("EOB")
 
 type VolcanoOperator interface {
 	Open() error
-	Next() (ColumnarBatch, error)
+	Next() (common.ColumnarBatch, error)
 	Close() error
 }
 
 type VolcanoEngine struct {
 }
 
-func (engine *VolcanoEngine) Process(operator *VolcanoOperator) (*CloseableIterator, error) {
-	var iterator CloseableIterator
+func (engine *VolcanoEngine) Execute(leafs map[string]*services.Leaf, p *plan.Plan) (*common.CloseableIterator, error) {
+	operator, err := convertPlanToVolcanoOperator(leafs, p)
+	if err != nil {
+		return nil, err
+	}
+
+	var iterator common.CloseableIterator
 	iterator = &volcanoIterator{
 		root: operator,
 	}
@@ -33,9 +38,74 @@ func (engine *VolcanoEngine) Process(operator *VolcanoOperator) (*CloseableItera
 	return &iterator, nil
 }
 
+func convertPlanToVolcanoOperator(leafs map[string]*services.Leaf, p *plan.Plan) (*VolcanoOperator, error) {
+	filter, err := extractFilterFromPlan(p)
+	if err != nil {
+		return nil, err
+	}
+
+	s := leafs[filter.Input().(*plan.NamedTableReadRel).Names()[0]].Store
+	iterator, err := (*s).Iterator()
+	if err != nil {
+		return nil, err
+	}
+
+	var scanOperator VolcanoOperator
+	scanOperator = newVolcanoScan(iterator)
+
+	extensionSet := exprs.NewExtensionSet(p.ExtensionRegistry(), exprs.DefaultExtensionIDRegistry)
+	extended := &expr.Extended{
+		Extensions: extensionSet.GetSubstraitRegistry().Set,
+		ReferredExpr: []expr.ExpressionReference{
+			expr.NewExpressionReference([]string{"out"}, filter.Condition()),
+		},
+		BaseSchema: (*s).NamedStruct(),
+	}
+
+	ctx := exprs.WithExtensionIDSet(compute.WithAllocator(context.Background(), memory.DefaultAllocator), extensionSet)
+
+	var filterOperator VolcanoOperator
+	filterOperator = newVolcanoFilter(&scanOperator, func(batch common.ColumnarBatch) common.ColumnarBatch {
+		var records arrow.Record
+		records = *batch
+
+		recordDatum := compute.NewDatum(records)
+		selector, _ := exprs.ExecuteScalarSubstrait(ctx, extended, recordDatum)
+		dtm := selector.(*compute.ArrayDatum)
+
+		filtered, _ := compute.FilterRecordBatch(ctx, *batch, dtm.MakeArray(), compute.DefaultFilterOptions())
+		return &filtered
+	})
+
+	return &filterOperator, nil
+}
+
+func extractFilterFromPlan(p *plan.Plan) (*plan.FilterRel, error) {
+	if len(p.Relations()) != 1 {
+		return nil, fmt.Errorf("expecting only one relation part of the plan got: %d", len(p.Relations()))
+	}
+
+	relation := p.Relations()[0]
+	if !relation.IsRoot() {
+		return nil, errors.New("expecting the plan relation to be a root one")
+	}
+
+	root := relation.Root()
+	rel := root.Input()
+
+	switch r := rel.(type) {
+	case *plan.FilterRel:
+		return r, nil
+	}
+
+	log.Printf("%+v\n", rel)
+
+	return nil, errors.New("not implemented")
+}
+
 type volcanoIterator struct {
 	root    *VolcanoOperator
-	current ColumnarBatch
+	current common.ColumnarBatch
 }
 
 func (vi *volcanoIterator) Next() bool {
@@ -45,7 +115,7 @@ func (vi *volcanoIterator) Next() bool {
 	}
 
 	if err != nil {
-		if err == EOB {
+		if err == common.EOB {
 			return false
 		}
 
@@ -56,7 +126,7 @@ func (vi *volcanoIterator) Next() bool {
 	return true
 }
 
-func (vi *volcanoIterator) Value() ColumnarBatch {
+func (vi *volcanoIterator) Value() common.ColumnarBatch {
 	return vi.current
 }
 
@@ -65,10 +135,10 @@ func (vi *volcanoIterator) Close() {
 }
 
 type VolcanoScan struct {
-	source CloseableIterator
+	source common.CloseableIterator
 }
 
-func NewVolcanoScan(source *CloseableIterator) *VolcanoScan {
+func newVolcanoScan(source *common.CloseableIterator) *VolcanoScan {
 	return &VolcanoScan{source: *source}
 }
 
@@ -76,12 +146,12 @@ func (scan *VolcanoScan) Open() error {
 	return nil
 }
 
-func (scan *VolcanoScan) Next() (ColumnarBatch, error) {
+func (scan *VolcanoScan) Next() (common.ColumnarBatch, error) {
 	if scan.source.Next() {
 		return scan.source.Value(), nil
 	}
 
-	return nil, EOB
+	return nil, common.EOB
 }
 
 func (scan *VolcanoScan) Close() error {
@@ -91,10 +161,10 @@ func (scan *VolcanoScan) Close() error {
 
 type VolcanoFilter struct {
 	child     VolcanoOperator
-	condition func(ColumnarBatch) ColumnarBatch
+	condition func(common.ColumnarBatch) common.ColumnarBatch
 }
 
-func NewVolcanoFilter(child *VolcanoOperator, condition func(ColumnarBatch) ColumnarBatch) *VolcanoFilter {
+func newVolcanoFilter(child *VolcanoOperator, condition func(common.ColumnarBatch) common.ColumnarBatch) *VolcanoFilter {
 	return &VolcanoFilter{child: *child, condition: condition}
 }
 
@@ -102,11 +172,11 @@ func (filter *VolcanoFilter) Open() error {
 	return filter.child.Open()
 }
 
-func (filter *VolcanoFilter) Next() (ColumnarBatch, error) {
+func (filter *VolcanoFilter) Next() (common.ColumnarBatch, error) {
 	batch, err := filter.child.Next()
 	if err != nil {
-		if err == EOB {
-			return nil, EOB
+		if err == common.EOB {
+			return nil, common.EOB
 		}
 
 		return nil, err

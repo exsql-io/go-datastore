@@ -8,7 +8,6 @@ import (
 	"github.com/apache/arrow/go/v13/arrow/array"
 	"github.com/apache/arrow/go/v13/arrow/compute"
 	"github.com/exsql-io/go-datastore/common"
-	"github.com/exsql-io/go-datastore/engine"
 	"github.com/substrait-io/substrait-go/types"
 )
 
@@ -47,7 +46,7 @@ func (iterator *arrowTableCloseableIterator) Next() bool {
 	return false
 }
 
-func (iterator *arrowTableCloseableIterator) Value() engine.ColumnarBatch {
+func (iterator *arrowTableCloseableIterator) Value() common.ColumnarBatch {
 	record := iterator.reader.Record()
 	return &record
 }
@@ -79,8 +78,8 @@ func (iterator *arrowTableCloseableIterator) prepareNextNonEmptyBatch() bool {
 	return true
 }
 
-func NewArrowTableCloseableIterator(inMemoryRecords arrow.Record, records []arrow.Record) *engine.CloseableIterator {
-	var iterator engine.CloseableIterator
+func NewArrowTableCloseableIterator(inMemoryRecords arrow.Record, records []arrow.Record) *common.CloseableIterator {
+	var iterator common.CloseableIterator
 	iterator = &arrowTableCloseableIterator{
 		ctx:             context.Background(),
 		schema:          inMemoryRecords.Schema(),
@@ -99,7 +98,7 @@ type Filter func(compute.Datum) (compute.Datum, error)
 type Store interface {
 	Put(offset int64, key []byte, value []byte) error
 	Close()
-	Iterator() (*engine.CloseableIterator, error)
+	Iterator() (*common.CloseableIterator, error)
 	Schema() *arrow.Schema
 	NamedStruct() types.NamedStruct
 }

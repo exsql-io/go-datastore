@@ -9,7 +9,6 @@ import (
 	"github.com/apache/arrow/go/v13/arrow/csv"
 	"github.com/apache/arrow/go/v13/arrow/memory"
 	"github.com/exsql-io/go-datastore/common"
-	"github.com/exsql-io/go-datastore/engine"
 	"github.com/substrait-io/substrait-go/types"
 )
 
@@ -58,7 +57,7 @@ func (store *InMemoryStore) Put(_ int64, _ []byte, value []byte) error {
 	return nil
 }
 
-func (store *InMemoryStore) Iterator() (*engine.CloseableIterator, error) {
+func (store *InMemoryStore) Iterator() (*common.CloseableIterator, error) {
 	inMemoryRecords, err := store.inMemoryToRecords()
 	if err != nil {
 		return nil, err
