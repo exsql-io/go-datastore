@@ -42,7 +42,7 @@ func main() {
 		leafs[stream.Topic] = leaf
 	}
 
-	volcanoEngine := engine.VolcanoEngine{}
+	volcanoEngine := engine.NewVolcanoEngine()
 
 	e := echo.New()
 	e.GET("/streams/:name", func(context echo.Context) error { return getStream(leafs, context) })

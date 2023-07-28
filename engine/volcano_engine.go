@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/apache/arrow/go/v13/arrow"
+	"github.com/apache/arrow/go/v13/arrow/array"
 	"github.com/apache/arrow/go/v13/arrow/compute"
 	"github.com/apache/arrow/go/v13/arrow/compute/exprs"
 	"github.com/apache/arrow/go/v13/arrow/memory"
@@ -12,6 +13,7 @@ import (
 	"github.com/exsql-io/go-datastore/services"
 	"github.com/substrait-io/substrait-go/expr"
 	"github.com/substrait-io/substrait-go/plan"
+	"github.com/substrait-io/substrait-go/types"
 	"log"
 )
 
@@ -22,10 +24,17 @@ type VolcanoOperator interface {
 }
 
 type VolcanoEngine struct {
+	allocator memory.Allocator
+}
+
+func NewVolcanoEngine() VolcanoEngine {
+	return VolcanoEngine{
+		allocator: memory.DefaultAllocator,
+	}
 }
 
 func (engine *VolcanoEngine) Execute(leafs map[string]*services.Leaf, p *plan.Plan) (*common.CloseableIterator, error) {
-	operator, err := convertPlanToVolcanoOperator(leafs, p)
+	operator, err := engine.convertPlanToVolcanoOperator(leafs, p)
 	if err != nil {
 		return nil, err
 	}
@@ -38,13 +47,15 @@ func (engine *VolcanoEngine) Execute(leafs map[string]*services.Leaf, p *plan.Pl
 	return &iterator, nil
 }
 
-func convertPlanToVolcanoOperator(leafs map[string]*services.Leaf, p *plan.Plan) (*VolcanoOperator, error) {
+func (engine *VolcanoEngine) convertPlanToVolcanoOperator(leafs map[string]*services.Leaf, p *plan.Plan) (*VolcanoOperator, error) {
 	filter, err := extractFilterFromPlan(p)
 	if err != nil {
 		return nil, err
 	}
 
-	s := leafs[filter.Input().(*plan.NamedTableReadRel).Names()[0]].Store
+	project := filter.Input().(*plan.ProjectRel)
+
+	s := leafs[project.Input().(*plan.NamedTableReadRel).Names()[0]].Store
 	iterator, err := (*s).Iterator()
 	if err != nil {
 		return nil, err
@@ -54,7 +65,32 @@ func convertPlanToVolcanoOperator(leafs map[string]*services.Leaf, p *plan.Plan)
 	scanOperator = newVolcanoScan(iterator)
 
 	extensionSet := exprs.NewExtensionSet(p.ExtensionRegistry(), exprs.DefaultExtensionIDRegistry)
-	extended := &expr.Extended{
+	ctx := exprs.WithExtensionIDSet(compute.WithAllocator(context.Background(), memory.DefaultAllocator), extensionSet)
+
+	args := make([]types.FuncArg, len(project.Expressions()))
+	for index, e := range project.Expressions() {
+		args[index] = e
+	}
+
+	var projectOperator VolcanoOperator
+	projectOperator = newVolcanoProjection(&scanOperator, func(batch common.ColumnarBatch) common.ColumnarBatch {
+		var records arrow.Record
+		records = *batch
+
+		fields := make([]arrow.Field, len(project.OutputMapping()))
+		columns := make([]arrow.Array, len(project.OutputMapping()))
+		for index, id := range project.OutputMapping() {
+			fields[index] = records.Schema().Field(int(id))
+			columns[index] = records.Column(int(id))
+		}
+
+		var projected arrow.Record
+		projected = array.NewRecord(arrow.NewSchema(fields, nil), columns, records.NumRows())
+
+		return &projected
+	})
+
+	filterExtended := &expr.Extended{
 		Extensions: extensionSet.GetSubstraitRegistry().Set,
 		ReferredExpr: []expr.ExpressionReference{
 			expr.NewExpressionReference([]string{"out"}, filter.Condition()),
@@ -62,18 +98,28 @@ func convertPlanToVolcanoOperator(leafs map[string]*services.Leaf, p *plan.Plan)
 		BaseSchema: (*s).NamedStruct(),
 	}
 
-	ctx := exprs.WithExtensionIDSet(compute.WithAllocator(context.Background(), memory.DefaultAllocator), extensionSet)
-
 	var filterOperator VolcanoOperator
-	filterOperator = newVolcanoFilter(&scanOperator, func(batch common.ColumnarBatch) common.ColumnarBatch {
+	filterOperator = newVolcanoFilter(&projectOperator, func(batch common.ColumnarBatch) common.ColumnarBatch {
 		var records arrow.Record
 		records = *batch
 
 		recordDatum := compute.NewDatum(records)
-		selector, _ := exprs.ExecuteScalarSubstrait(ctx, extended, recordDatum)
+		defer recordDatum.Release()
+
+		selector, err := exprs.ExecuteScalarSubstrait(ctx, filterExtended, recordDatum)
+		if err != nil {
+			log.Fatalln(err)
+		}
+
+		defer selector.Release()
+
 		dtm := selector.(*compute.ArrayDatum)
 
-		filtered, _ := compute.FilterRecordBatch(ctx, *batch, dtm.MakeArray(), compute.DefaultFilterOptions())
+		filtered, err := compute.FilterRecordBatch(ctx, *batch, dtm.MakeArray(), compute.DefaultFilterOptions())
+		if err != nil {
+			log.Fatalln(err)
+		}
+
 		return &filtered
 	})
 
@@ -186,5 +232,35 @@ func (filter *VolcanoFilter) Next() (common.ColumnarBatch, error) {
 }
 
 func (filter *VolcanoFilter) Close() error {
+	return filter.child.Close()
+}
+
+type VolcanoProjection struct {
+	child   VolcanoOperator
+	project func(common.ColumnarBatch) common.ColumnarBatch
+}
+
+func newVolcanoProjection(child *VolcanoOperator, project func(common.ColumnarBatch) common.ColumnarBatch) *VolcanoProjection {
+	return &VolcanoProjection{child: *child, project: project}
+}
+
+func (filter *VolcanoProjection) Open() error {
+	return filter.child.Open()
+}
+
+func (filter *VolcanoProjection) Next() (common.ColumnarBatch, error) {
+	batch, err := filter.child.Next()
+	if err != nil {
+		if err == common.EOB {
+			return nil, common.EOB
+		}
+
+		return nil, err
+	}
+
+	return filter.project(batch), nil
+}
+
+func (filter *VolcanoProjection) Close() error {
 	return filter.child.Close()
 }

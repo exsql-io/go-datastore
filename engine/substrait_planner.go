@@ -6,50 +6,118 @@ import (
 	"github.com/substrait-io/substrait-go/expr"
 	"github.com/substrait-io/substrait-go/plan"
 	"github.com/substrait-io/substrait-go/types"
-	"golang.org/x/exp/slices"
 	"strconv"
 	"vitess.io/vitess/go/vt/sqlparser"
 )
 
+type PhysicalRelation struct {
+	name   string
+	schema types.NamedStruct
+}
+
+func (pr *PhysicalRelation) createLookup() map[string]int32 {
+	lookup := map[string]int32{}
+	for index, name := range pr.schema.Names {
+		lookup[name] = int32(index)
+	}
+
+	return lookup
+}
+
+type PhysicalRelationResolver func(name string) (PhysicalRelation, error)
+
 func Plan(leafs map[string]*services.Leaf, sql string) (*plan.Plan, error) {
+	resolver := func(name string) (PhysicalRelation, error) {
+		leaf := leafs[name]
+		return PhysicalRelation{name: leaf.Name, schema: (*leaf.Store).NamedStruct()}, nil
+	}
+
 	statement, err := sqlparser.Parse(sql)
 	if err != nil {
 		return nil, err
 	}
 
+	builder := plan.NewBuilderDefault()
+
 	switch stm := statement.(type) {
 	case *sqlparser.Select:
-		switch condition := stm.Where.Expr.(type) {
-		case *sqlparser.ComparisonExpr:
-			leaf := leafs[stm.From[0].(*sqlparser.AliasedTableExpr).Expr.(sqlparser.TableName).Name.String()]
-			builder := plan.NewBuilderDefault()
-			rel, err := buildFilter(leaf, builder, condition)
-			if err != nil {
-				return nil, err
-			}
-
-			rootNames := toColumnNames(stm.SelectExprs)
-			p, err := builder.Plan(rel, rootNames)
-			if err != nil {
-				return nil, err
-			}
-
-			return p, nil
+		s, pr, err := handleFrom(builder, resolver, stm.From)
+		if err != nil {
+			return nil, err
 		}
+
+		lookup := pr.createLookup()
+
+		rootNames, proj, err := handleProjection(builder, s, lookup, stm.SelectExprs)
+
+		f, err := handleWhere(builder, proj, lookup, stm.Where)
+		if err != nil {
+			return nil, err
+		}
+
+		p, err := builder.Plan(f, rootNames)
+		if err != nil {
+			return nil, err
+		}
+
+		return p, nil
 	}
 
 	return nil, errors.New("not implemented")
 }
 
-func buildFilter(leaf *services.Leaf, builder plan.Builder, comparison *sqlparser.ComparisonExpr) (*plan.FilterRel, error) {
-	scan := builder.NamedScan([]string{leaf.Name}, (*leaf.Store).NamedStruct())
+func handleFrom(builder plan.Builder, resolver PhysicalRelationResolver, from []sqlparser.TableExpr) (*plan.NamedTableReadRel, *PhysicalRelation, error) {
+	physicalRelation, err := resolver(from[0].(*sqlparser.AliasedTableExpr).Expr.(sqlparser.TableName).Name.String())
+	if err != nil {
+		return nil, nil, err
+	}
 
-	condition, err := toCondition(builder, scan, comparison)
+	scan := builder.NamedScan([]string{physicalRelation.name}, physicalRelation.schema)
+
+	return scan, &physicalRelation, nil
+}
+
+func handleWhere(builder plan.Builder, input plan.Rel, lookup map[string]int32, where *sqlparser.Where) (*plan.FilterRel, error) {
+	switch condition := where.Expr.(type) {
+	case *sqlparser.ComparisonExpr:
+		f, err := buildFilter(builder, input, lookup, condition)
+		if err != nil {
+			return nil, err
+		}
+
+		return f, nil
+	}
+
+	return nil, errors.New("not implemented")
+}
+
+func handleProjection(builder plan.Builder, input plan.Rel, lookup map[string]int32, selectExprs sqlparser.SelectExprs) ([]string, *plan.ProjectRel, error) {
+	rootNames := toColumnNames(selectExprs)
+	expressions, err := toExpressions(builder, input, lookup, selectExprs)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	project, err := builder.ProjectRemap(input, toMapping(rootNames, lookup), expressions...)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return rootNames, project, nil
+}
+
+func buildFilter(builder plan.Builder, input plan.Rel, lookup map[string]int32, comparison *sqlparser.ComparisonExpr) (*plan.FilterRel, error) {
+	condition, err := toCondition(builder, input, lookup, comparison)
 	if err != nil {
 		return nil, err
 	}
 
-	filter, err := builder.Filter(scan, condition)
+	mapping := make([]int32, len(input.OutputMapping()))
+	for index, _ := range mapping {
+		mapping[index] = int32(index)
+	}
+
+	filter, err := builder.FilterRemap(input, condition, mapping)
 	if err != nil {
 		return nil, err
 	}
@@ -57,13 +125,13 @@ func buildFilter(leaf *services.Leaf, builder plan.Builder, comparison *sqlparse
 	return filter, nil
 }
 
-func toCondition(builder plan.Builder, scan *plan.NamedTableReadRel, comparison *sqlparser.ComparisonExpr) (*expr.ScalarFunction, error) {
-	left, err := toArg(builder, scan, comparison.Left)
+func toCondition(builder plan.Builder, input plan.Rel, lookup map[string]int32, comparison *sqlparser.ComparisonExpr) (*expr.ScalarFunction, error) {
+	left, err := toArg(builder, input, lookup, comparison.Left)
 	if err != nil {
 		return nil, err
 	}
 
-	right, err := toArg(builder, scan, comparison.Right)
+	right, err := toArg(builder, input, lookup, comparison.Right)
 	if err != nil {
 		return nil, err
 	}
@@ -83,7 +151,7 @@ func toCondition(builder plan.Builder, scan *plan.NamedTableReadRel, comparison 
 	return fn, nil
 }
 
-func toArg(builder plan.Builder, scan *plan.NamedTableReadRel, sqlExpr sqlparser.Expr) (types.FuncArg, error) {
+func toArg(builder plan.Builder, input plan.Rel, lookup map[string]int32, sqlExpr sqlparser.Expr) (types.FuncArg, error) {
 	switch value := sqlExpr.(type) {
 	case *sqlparser.Literal:
 		switch value.Type {
@@ -98,8 +166,7 @@ func toArg(builder plan.Builder, scan *plan.NamedTableReadRel, sqlExpr sqlparser
 			return expr.NewPrimitiveLiteral(int32(i), false), nil
 		}
 	case *sqlparser.ColName:
-		index := slices.Index(scan.BaseSchema().Names, value.Name.String())
-		return builder.RootFieldRef(scan, int32(index))
+		return builder.RootFieldRef(input, lookup[value.Name.String()])
 	}
 
 	return nil, errors.New("not implemented")
@@ -128,4 +195,48 @@ func toColumnNames(selectExprs sqlparser.SelectExprs) []string {
 	}
 
 	return columns
+}
+
+func toExpressions(builder plan.Builder, input plan.Rel, lookup map[string]int32, selectExprs sqlparser.SelectExprs) ([]expr.Expression, error) {
+	expressions := make([]expr.Expression, len(selectExprs))
+	for index, e := range selectExprs {
+		switch column := e.(type) {
+		case *sqlparser.AliasedExpr:
+			switch literal := column.Expr.(type) {
+			case *sqlparser.ColName:
+				expression, err := builder.RootFieldRef(input, lookup[literal.CompliantName()])
+				if err != nil {
+					return nil, err
+				}
+
+				expressions[index] = expression
+				break
+			}
+			break
+
+		case *sqlparser.Nextval:
+			switch literal := column.Expr.(type) {
+			case *sqlparser.ColName:
+				expression, err := builder.RootFieldRef(input, lookup[literal.CompliantName()])
+				if err != nil {
+					return nil, err
+				}
+
+				expressions[index] = expression
+				break
+			}
+			break
+		}
+	}
+
+	return expressions, nil
+}
+
+func toMapping(columns []string, lookup map[string]int32) []int32 {
+	mapping := make([]int32, len(columns))
+	for index, column := range columns {
+		mapping[index] = lookup[column]
+	}
+
+	return mapping
 }
