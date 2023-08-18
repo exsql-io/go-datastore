@@ -1,13 +1,14 @@
 package store
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"github.com/apache/arrow/go/v13/arrow"
 	"github.com/apache/arrow/go/v13/arrow/array"
+	"github.com/apache/arrow/go/v13/arrow/csv"
 	"github.com/apache/arrow/go/v13/arrow/memory"
 	"github.com/exsql-io/go-datastore/common"
-	"github.com/exsql-io/go-datastore/engine"
 	"github.com/substrait-io/substrait-go/types"
 )
 
@@ -56,7 +57,7 @@ func (store *InMemoryStore) Put(_ int64, _ []byte, value []byte) error {
 	return nil
 }
 
-func (store *InMemoryStore) Iterator() (*engine.CloseableIterator, error) {
+func (store *InMemoryStore) Iterator() (*common.CloseableIterator, error) {
 	inMemoryRecords, err := store.inMemoryToRecords()
 	if err != nil {
 		return nil, err
@@ -93,6 +94,12 @@ func toType(dataType arrow.DataType) types.Type {
 	switch dataType {
 	case arrow.PrimitiveTypes.Int32:
 		return &types.Int32Type{Nullability: types.NullabilityRequired}
+	case arrow.PrimitiveTypes.Int64:
+		return &types.Int64Type{Nullability: types.NullabilityRequired}
+	case arrow.PrimitiveTypes.Float64:
+		return &types.Float64Type{Nullability: types.NullabilityRequired}
+	case arrow.PrimitiveTypes.Date32:
+		return &types.DateType{Nullability: types.NullabilityRequired}
 	case arrow.BinaryTypes.String:
 		return &types.StringType{Nullability: types.NullabilityRequired}
 	}
@@ -121,6 +128,27 @@ func (store *InMemoryStore) inMemoryToRecords() (arrow.Record, error) {
 		}
 
 		record := builder.NewRecord()
+		record.Retain()
+
+		builder.Release()
+
+		return record, nil
+	case CSV:
+		reader := csv.NewReader(
+			bytes.NewReader(bytes.Join(store.buffered, []byte("\n"))),
+			store.schema,
+			csv.WithChunk(int(DefaultGroupSize)),
+			csv.WithHeader(false))
+
+		if !reader.Next() {
+			return nil, errors.New("unable to process in memory batch")
+		}
+
+		record := reader.Record()
+		record.Retain()
+
+		reader.Release()
+
 		return record, nil
 	}
 

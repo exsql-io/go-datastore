@@ -4,11 +4,12 @@ go 1.20
 
 require (
 	github.com/apache/arrow/go/v13 v13.0.0-20230628212119-c0dd99f3fb43
+	github.com/goccy/go-json v0.10.0
 	github.com/labstack/echo/v4 v4.10.2
 	github.com/substrait-io/substrait-go v0.4.0
 	github.com/twmb/franz-go v1.13.5
-	google.golang.org/protobuf v1.31.0
 	gopkg.in/yaml.v3 v3.0.1
+	vitess.io/vitess v0.17.0
 )
 
 require (
@@ -26,7 +27,6 @@ require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/fatih/color v1.14.1 // indirect
 	github.com/fsnotify/fsnotify v1.6.0 // indirect
-	github.com/goccy/go-json v0.10.0 // indirect
 	github.com/goccy/go-yaml v1.9.8 // indirect
 	github.com/golang/glog v1.0.0 // indirect
 	github.com/golang/protobuf v1.5.2 // indirect
@@ -84,8 +84,8 @@ require (
 	golang.org/x/xerrors v0.0.0-20220907171357-04be3eba64a2 // indirect
 	google.golang.org/genproto v0.0.0-20230209215440-0dfe4f8abfcc // indirect
 	google.golang.org/grpc v1.53.0 // indirect
+	google.golang.org/protobuf v1.31.0 // indirect
 	gopkg.in/DataDog/dd-trace-go.v1 v1.47.0 // indirect
 	gopkg.in/ini.v1 v1.67.0 // indirect
 	inet.af/netaddr v0.0.0-20220811202034-502d2d690317 // indirect
-	vitess.io/vitess v0.17.0 // indirect
 )

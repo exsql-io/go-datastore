@@ -1,0 +1,33 @@
+fields:
+  - name: custkey
+    nullable: false
+    type:
+      name: long
+  - name: name
+    nullable: false
+    type:
+      name: utf8
+  - name: address
+    nullable: false
+    type:
+      name: utf8
+  - name: nationkey
+    nullable: false
+    type:
+      name: long
+  - name: phone
+    nullable: false
+    type:
+      name: utf8
+  - name: acctbal
+    nullable: false
+    type:
+      name: double
+  - name: mktsegment
+    nullable: false
+    type:
+      name: utf8
+  - name: comment
+    nullable: false
+    type:
+      name: utf8
