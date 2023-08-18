@@ -2,6 +2,7 @@ package engine
 
 import (
 	"errors"
+	"fmt"
 	"github.com/exsql-io/go-datastore/services"
 	"github.com/substrait-io/substrait-go/expr"
 	"github.com/substrait-io/substrait-go/plan"
@@ -158,12 +159,12 @@ func toArg(builder plan.Builder, input plan.Rel, lookup map[string]int32, sqlExp
 		case sqlparser.StrVal:
 			return expr.NewPrimitiveLiteral(value.Val, false), nil
 		case sqlparser.IntVal:
-			i, err := strconv.ParseInt(value.Val, 10, 32)
+			i, err := strconv.ParseInt(value.Val, 10, 64)
 			if err != nil {
 				return nil, err
 			}
 
-			return expr.NewPrimitiveLiteral(int32(i), false), nil
+			return expr.NewPrimitiveLiteral(i, false), nil
 		}
 	case *sqlparser.ColName:
 		return builder.RootFieldRef(input, lookup[value.Name.String()])
@@ -211,6 +212,29 @@ func toExpressions(builder plan.Builder, input plan.Rel, lookup map[string]int32
 
 				expressions[index] = expression
 				break
+			case *sqlparser.BinaryExpr:
+				namespace, name, err := toSubstraitFunction(literal.Operator)
+				if err != nil {
+					return nil, err
+				}
+
+				left, err := toArg(builder, input, lookup, literal.Left)
+				if err != nil {
+					return nil, err
+				}
+
+				right, err := toArg(builder, input, lookup, literal.Right)
+				if err != nil {
+					return nil, err
+				}
+
+				expression, err := builder.ScalarFn(*namespace, *name, nil, left, right)
+				if err != nil {
+					return nil, err
+				}
+
+				expressions[index] = expression
+				break
 			}
 			break
 
@@ -230,6 +254,21 @@ func toExpressions(builder plan.Builder, input plan.Rel, lookup map[string]int32
 	}
 
 	return expressions, nil
+}
+
+func toSubstraitFunction(operator sqlparser.BinaryExprOperator) (*string, *string, error) {
+	var namespace, name string
+
+	switch operator {
+	case sqlparser.PlusOp:
+		namespace = "https://github.com/substrait-io/substrait/blob/main/extensions/functions_arithmetic.yaml"
+		name = "add"
+		break
+	default:
+		return nil, nil, errors.New(fmt.Sprintf("unsupported operator: %s", operator.ToString()))
+	}
+
+	return &namespace, &name, nil
 }
 
 func toMapping(columns []string, lookup map[string]int32) []int32 {
